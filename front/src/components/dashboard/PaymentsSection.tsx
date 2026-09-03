@@ -5,7 +5,9 @@ import Button from '../common/Button';
 import FormAlert from '../common/FormAlert';
 import ConfirmDialog from '../admin/ConfirmDialog';
 import CardForm from '../checkout/CardForm';
+import RenewalPrompt from './RenewalPrompt';
 import { formatCardLabel, cardExpiryWarning } from './saved-card';
+import { needsRenewal } from './payments';
 import { getMyPayments } from '../../services/payment.service';
 import {
   getMySavedCard,
@@ -156,6 +158,10 @@ const PaymentsSection = () => {
 
   return (
     <div className="space-y-6">
+      {!isLoading && needsRenewal(subscription) && subscription && (
+        <RenewalPrompt subscription={subscription} />
+      )}
+
       <Card className="hover:translate-y-0 hover:shadow-lg">
         <h3 className="font-display text-lg font-semibold text-text">
           Forma de pago
@@ -267,8 +273,8 @@ const PaymentsSection = () => {
           <Card className="mt-4 text-center hover:translate-y-0 hover:shadow-lg">
             <Receipt className="mx-auto h-10 w-10 text-text-muted" />
             <p className="mt-3 font-body text-sm text-text-muted">
-              Todavía no tenés pagos registrados. Los pagos presenciales que
-              registre el gimnasio van a aparecer acá.
+              Todavía no tenés pagos registrados. Acá van a aparecer tus pagos
+              online.
             </p>
           </Card>
         ) : (

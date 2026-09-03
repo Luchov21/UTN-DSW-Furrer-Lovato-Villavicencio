@@ -25,9 +25,12 @@ export interface CreateChargeParams {
   planId: number;
   months: number;
   amount: number;
-  method: 'point' | 'qr';
-  collectionPointId: string;
-  adminId: number;
+  method: 'point' | 'qr' | 'online';
+  // Null only for 'online'. A point or QR order without one would arm a
+  // charge nothing can collect.
+  collectionPointId: string | null;
+  // Null only for 'online' — self-service, no admin involved.
+  adminId: number | null;
 }
 
 // Front-desk bookkeeping for card-terminal ("point") and QR charges. This is
@@ -101,7 +104,12 @@ export class ChargeOrderService {
     // abandoned charge from a few minutes ago never blocks the counter. Bulk
     // cleanup, not part of the atomicity concern below, so it runs on its
     // own outside the transaction.
-    await this.expireStale();
+    //
+    // Only the counter can be blocked by a stale order; skip the sweep for an
+    // online charge so a member's checkout does not pay for it.
+    if (method !== 'online') {
+      await this.expireStale();
+    }
 
     const now = new Date();
     const externalReference = buildExternalReference(
@@ -120,19 +128,25 @@ export class ChargeOrderService {
     // Same manager.transaction(...) pattern as
     // SavedCardService.saveForUser's deactivate-then-insert pair.
     return this.chargeOrderRepository.manager.transaction(async (manager) => {
-      const pendingState: string = ChargeOrderStatus.PENDING;
-      const busyOrder = await manager
-        .createQueryBuilder(ChargeOrder, 'chargeOrder')
-        .setLock('pessimistic_write')
-        .where('chargeOrder.collectionPointId = :collectionPointId', {
-          collectionPointId,
-        })
-        .andWhere('chargeOrder.status = :status', { status: pendingState })
-        .getOne();
-      if (busyOrder) {
-        throw new ConflictException(
-          'Ya hay un cobro en curso en este punto de cobro.',
-        );
+      // The busy-point lock protects a shared physical collection point from
+      // two live orders. An online order has none, so there is nothing to
+      // lock — and taking the lock with a null key would serialise every
+      // online checkout behind a single row.
+      if (method !== 'online') {
+        const pendingState: string = ChargeOrderStatus.PENDING;
+        const busyOrder = await manager
+          .createQueryBuilder(ChargeOrder, 'chargeOrder')
+          .setLock('pessimistic_write')
+          .where('chargeOrder.collectionPointId = :collectionPointId', {
+            collectionPointId,
+          })
+          .andWhere('chargeOrder.status = :status', { status: pendingState })
+          .getOne();
+        if (busyOrder) {
+          throw new ConflictException(
+            'Ya hay un cobro en curso en este punto de cobro.',
+          );
+        }
       }
 
       const newOrder = manager.create(ChargeOrder, {

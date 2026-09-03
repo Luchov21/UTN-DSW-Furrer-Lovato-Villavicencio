@@ -368,6 +368,50 @@ describe('ChargeOrderService.createCharge', () => {
       expect.objectContaining({ status: ChargeOrderStatus.PENDING }),
     );
   });
+
+  it('skips the busy-point check for an online order', async () => {
+    await buildService();
+
+    await service.createCharge({
+      ...params,
+      method: 'online',
+      collectionPointId: null,
+      adminId: null,
+    });
+
+    expect(manager.createQueryBuilder).not.toHaveBeenCalled();
+  });
+
+  it('still enforces the busy-point check for a point order', async () => {
+    await buildService();
+    queryBuilder.getOne.mockResolvedValue({ id: 99 });
+
+    await expect(service.createCharge(params)).rejects.toBeInstanceOf(
+      ConflictException,
+    );
+    expect(manager.createQueryBuilder).toHaveBeenCalled();
+  });
+
+  it('stores an online order with no collection point and no admin', async () => {
+    await buildService();
+
+    await service.createCharge({
+      ...params,
+      method: 'online',
+      collectionPointId: null,
+      adminId: null,
+    });
+
+    expect(manager.create).toHaveBeenCalledWith(
+      ChargeOrder,
+      expect.objectContaining({
+        method: 'online',
+        collectionPointId: null,
+        createdById: null,
+        status: ChargeOrderStatus.PENDING,
+      }),
+    );
+  });
 });
 
 describe('ChargeOrderService.findByExternalReference', () => {

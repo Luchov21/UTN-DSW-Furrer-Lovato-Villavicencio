@@ -14,6 +14,9 @@ import NotFound from '../pages/NotFound/NotFound';
 import Trainers from '../pages/Trainers/Trainers';
 import Dashboard from '../pages/Dashboard/Dashboard';
 import AdminDashboard from '../pages/Admin/AdminDashboard';
+import Terms from '../pages/Legal/Terms';
+import Privacy from '../pages/Legal/Privacy';
+import Rules from '../pages/Legal/Rules';
 import ProtectedRoute from './ProtectedRoute';
 import RootLayout from './RootLayout';
 
@@ -89,6 +92,18 @@ export const router = createBrowserRouter([
             <AdminDashboard />
           </ProtectedRoute>
         ),
+      },
+      {
+        path: '/terms',
+        element: <Terms />,
+      },
+      {
+        path: '/privacy',
+        element: <Privacy />,
+      },
+      {
+        path: '/rules',
+        element: <Rules />,
       },
       {
         path: '*',

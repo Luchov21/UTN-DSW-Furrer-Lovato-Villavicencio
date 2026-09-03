@@ -1,11 +1,21 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  Injectable,
+  Logger,
+  NotFoundException,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { PlanService } from '../plan/plan.service';
 import { PlanDurationService } from '../plan/plan-duration.service';
 import { ChargeOrderService } from '../chargeOrder/chargeOrder.service';
 import type { MpPaymentResult } from '../mercadopago/mercadopago.client';
-import { MercadoPagoClient } from '../mercadopago/mercadopago.client';
+import {
+  MercadoPagoClient,
+  MercadoPagoUnavailableError,
+} from '../mercadopago/mercadopago.client';
 import { PaymentService } from '../payment/payment.service';
 import { SavedCardService } from '../savedCard/savedCard.service';
+import { isChargeable } from '../savedCard/savedCard.rules';
 import { subscriptionService } from '../subscription/subscription.service';
 import { MailService } from '../../common/mail/mail.service';
 import type { CheckoutDto } from './dto/checkout-dto';
@@ -65,24 +75,125 @@ export class CheckoutService {
       adminId: null,
     });
 
-    const result = await this.mercadoPagoClient.chargeCardToken({
-      token: dto.cardToken as string,
+    let result: MpPaymentResult;
+    try {
+      result = dto.useSavedCard
+        ? await this.chargeExistingCard(
+            userId,
+            summary,
+            order.externalReference,
+          )
+        : await this.chargeNewCard(
+            dto,
+            email,
+            summary,
+            order.externalReference,
+          );
+    } catch (error) {
+      if (error instanceof MercadoPagoUnavailableError) {
+        await this.chargeOrderService.closeAsError(
+          order.externalReference,
+          error.message,
+        );
+        // We do not know whether anything was charged, so we say so rather
+        // than implying a decline the member could "fix" by paying again.
+        throw new ServiceUnavailableException(
+          'No pudimos conectarnos con Mercado Pago. Volvé a intentar en unos minutos.',
+        );
+      }
+      throw error;
+    }
+
+    if (result.status !== 'approved') {
+      await this.chargeOrderService.closeAsError(
+        order.externalReference,
+        result.statusDetail ?? result.status ?? 'unknown',
+      );
+      this.logger.warn(
+        `Checkout declined for user ${userId}: ${result.statusDetail ?? result.status ?? 'unknown'}`,
+      );
+      return {
+        status: result.status === 'in_process' ? 'in_process' : 'rejected',
+        statusDetail: result.statusDetail,
+      };
+    }
+
+    try {
+      return await this.settle(
+        result,
+        order.externalReference,
+        userId,
+        email,
+        dto,
+        summary,
+      );
+    } catch (error) {
+      // Mercado Pago has already taken the money. The order stays PENDING on
+      // purpose: ChargeOrderResolverAdapter resolves it on MP's next webhook
+      // retry and the existing receiver completes the sale on its own.
+      // Closing it here would make the resolver return null and throw that
+      // recovery away.
+      this.logger.error(
+        `Checkout approved but not recorded — mpPaymentId=${result.id} userId=${userId} planId=${dto.planId} amount=${summary.total}`,
+        error instanceof Error ? error.stack : error,
+      );
+      throw new ServiceUnavailableException(
+        'Tu pago fue aprobado pero no pudimos confirmar tu membresía. La estamos activando — vas a recibir el comprobante por email.',
+      );
+    }
+  }
+
+  private async chargeExistingCard(
+    userId: number,
+    summary: CheckoutSummary,
+    externalReference: string,
+  ): Promise<MpPaymentResult> {
+    const card = await this.savedCardService.findActiveForUser(userId);
+    if (!card || !isChargeable(card, new Date())) {
+      throw new ConflictException(
+        'No tenés una tarjeta guardada que se pueda usar. Ingresá una nueva.',
+      );
+    }
+
+    return this.mercadoPagoClient.chargeSavedCard({
+      customerId: card.mpCustomerId,
+      cardId: card.mpCardId,
       amount: summary.total,
       description: `Membresía FLG — ${summary.planName}`,
-      externalReference: order.externalReference,
-      // The token is single-use, so it is already unique per attempt: a
-      // double-tap on Pagar cannot become two charges.
-      idempotencyKey: `checkout-${dto.cardToken as string}`,
+      idempotencyKey: `checkout-${externalReference}`,
+    });
+  }
+
+  private async chargeNewCard(
+    dto: CheckoutDto,
+    email: string,
+    summary: CheckoutSummary,
+    externalReference: string,
+  ): Promise<MpPaymentResult> {
+    const token = dto.cardToken as string;
+    // Scoping the payment to a customer is what attaches the card to it: the
+    // token is single-use and this charge spends it, so there is no second
+    // token left to save afterwards.
+    const customer = dto.saveCard
+      ? await this.mercadoPagoClient.findOrCreateCustomer(email)
+      : undefined;
+
+    return this.mercadoPagoClient.chargeCardToken({
+      token,
+      amount: summary.total,
+      description: `Membresía FLG — ${summary.planName}`,
+      externalReference,
+      idempotencyKey: `checkout-${token}`,
+      customerId: customer?.id,
       payerEmail: email,
     });
-
-    return this.settle(result, order.externalReference, userId, dto, summary);
   }
 
   private async settle(
     result: MpPaymentResult,
     externalReference: string,
     userId: number,
+    email: string,
     dto: CheckoutDto,
     summary: CheckoutSummary,
   ): Promise<CheckoutResult> {
@@ -113,6 +224,10 @@ export class CheckoutService {
       newEndDate: subscription.endDate,
     });
 
+    if (dto.saveCard && dto.cardToken) {
+      await this.rememberCard(userId, email, dto.cardToken, subscription.id);
+    }
+
     return {
       status: 'approved',
       paymentId: payment.id,
@@ -121,5 +236,25 @@ export class CheckoutService {
       amount: summary.total,
       months: dto.months,
     };
+  }
+
+  // Never allowed to fail the sale: the money is taken and the membership is
+  // active, so a failure here costs the member a convenience, not a purchase.
+  // The response tells them to add the card from their panel instead.
+  private async rememberCard(
+    userId: number,
+    email: string,
+    cardToken: string,
+    subscriptionId: number,
+  ): Promise<void> {
+    try {
+      await this.savedCardService.saveForUser(userId, email, cardToken);
+      await this.subscriptionService.setAutoRenew(subscriptionId, true);
+    } catch (error) {
+      this.logger.warn(
+        `Could not save the card for user ${userId} after an approved checkout`,
+        error instanceof Error ? error.stack : error,
+      );
+    }
   }
 }

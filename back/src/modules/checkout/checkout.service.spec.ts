@@ -1,9 +1,13 @@
+import { ConflictException, ServiceUnavailableException } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { CheckoutService } from './checkout.service';
 import { PlanService } from '../plan/plan.service';
 import { PlanDurationService } from '../plan/plan-duration.service';
 import { ChargeOrderService } from '../chargeOrder/chargeOrder.service';
-import { MercadoPagoClient } from '../mercadopago/mercadopago.client';
+import {
+  MercadoPagoClient,
+  MercadoPagoUnavailableError,
+} from '../mercadopago/mercadopago.client';
 import { PaymentService } from '../payment/payment.service';
 import { SavedCardService } from '../savedCard/savedCard.service';
 import { subscriptionService } from '../subscription/subscription.service';
@@ -28,7 +32,13 @@ describe('CheckoutService.pay', () => {
   let subscriptions: { setAutoRenew: jest.Mock };
   let mail: { sendPaymentReceipt: jest.Mock };
 
-  const plan = { id: 12, name: 'Plan Full', price: 19995, numDays: 30, deleted: false };
+  const plan = {
+    id: 12,
+    name: 'Plan Full',
+    price: 19995,
+    numDays: 30,
+    deleted: false,
+  };
 
   const dto = {
     planId: 12,
@@ -145,5 +155,123 @@ describe('CheckoutService.pay', () => {
     expect(mercadoPago.chargeCardToken).toHaveBeenCalledWith(
       expect.objectContaining({ idempotencyKey: 'checkout-tok_abc' }),
     );
+  });
+
+  it('returns a decline without recording a payment', async () => {
+    mercadoPago.chargeCardToken.mockResolvedValue({
+      id: '556',
+      status: 'rejected',
+      statusDetail: 'cc_rejected_insufficient_amount',
+    });
+
+    const result = await service.pay(3, 'rosa@gmail.com', dto);
+
+    expect(result).toEqual({
+      status: 'rejected',
+      statusDetail: 'cc_rejected_insufficient_amount',
+    });
+    expect(payments.confirmPlanCharge).not.toHaveBeenCalled();
+    expect(chargeOrders.closeAsError).toHaveBeenCalledWith(
+      'flg-user-3-abcd1234',
+      'cc_rejected_insufficient_amount',
+    );
+  });
+
+  it('reports in_process without activating the subscription', async () => {
+    mercadoPago.chargeCardToken.mockResolvedValue({
+      id: '557',
+      status: 'in_process',
+      statusDetail: 'pending_review_manual',
+    });
+
+    const result = await service.pay(3, 'rosa@gmail.com', dto);
+
+    expect(result.status).toBe('in_process');
+    expect(payments.confirmPlanCharge).not.toHaveBeenCalled();
+  });
+
+  it('closes the order as an error when Mercado Pago is unreachable', async () => {
+    mercadoPago.chargeCardToken.mockRejectedValue(
+      new MercadoPagoUnavailableError('network down'),
+    );
+
+    await expect(service.pay(3, 'rosa@gmail.com', dto)).rejects.toBeInstanceOf(
+      ServiceUnavailableException,
+    );
+    expect(chargeOrders.closeAsError).toHaveBeenCalled();
+    expect(payments.confirmPlanCharge).not.toHaveBeenCalled();
+  });
+
+  it('charges the saved card without a token', async () => {
+    savedCards.findActiveForUser.mockResolvedValue({
+      mpCustomerId: 'cus_1',
+      mpCardId: 'card_1',
+      active: true,
+      deleted: false,
+      expirationMonth: 12,
+      expirationYear: 2099,
+    });
+    mercadoPago.chargeSavedCard.mockResolvedValue({
+      id: '558',
+      status: 'approved',
+    });
+
+    await service.pay(3, 'rosa@gmail.com', {
+      planId: 12,
+      months: 1,
+      useSavedCard: true,
+      acceptedTerms: true,
+    });
+
+    expect(mercadoPago.chargeSavedCard).toHaveBeenCalledWith(
+      expect.objectContaining({ customerId: 'cus_1', cardId: 'card_1' }),
+    );
+    expect(mercadoPago.chargeCardToken).not.toHaveBeenCalled();
+  });
+
+  it('refuses to use a saved card the member does not have', async () => {
+    savedCards.findActiveForUser.mockResolvedValue(null);
+
+    await expect(
+      service.pay(3, 'rosa@gmail.com', {
+        planId: 12,
+        months: 1,
+        useSavedCard: true,
+        acceptedTerms: true,
+      }),
+    ).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it('saves the card and enables auto-renew when asked', async () => {
+    await service.pay(3, 'rosa@gmail.com', { ...dto, saveCard: true });
+
+    expect(mercadoPago.findOrCreateCustomer).toHaveBeenCalledWith(
+      'rosa@gmail.com',
+    );
+    expect(savedCards.saveForUser).toHaveBeenCalled();
+    expect(subscriptions.setAutoRenew).toHaveBeenCalledWith(44, true);
+  });
+
+  it('still completes the sale when saving the card fails', async () => {
+    savedCards.saveForUser.mockRejectedValue(new Error('mp down'));
+
+    const result = await service.pay(3, 'rosa@gmail.com', {
+      ...dto,
+      saveCard: true,
+    });
+
+    expect(result.status).toBe('approved');
+  });
+
+  it('leaves the order pending when the post-approval write fails', async () => {
+    payments.confirmPlanCharge.mockRejectedValue(new Error('deadlock'));
+
+    await expect(service.pay(3, 'rosa@gmail.com', dto)).rejects.toBeInstanceOf(
+      ServiceUnavailableException,
+    );
+    // Closing it would make ChargeOrderResolverAdapter return null and break
+    // the webhook recovery this row exists for.
+    expect(chargeOrders.closeAsError).not.toHaveBeenCalled();
+    expect(chargeOrders.closeAsPaid).not.toHaveBeenCalled();
   });
 });

@@ -5,6 +5,8 @@ import CheckoutLayout from '../../components/checkout/CheckoutLayout';
 import CardForm from '../../components/checkout/CardForm';
 import PaymentMethodChoice from '../../components/checkout/PaymentMethodChoice';
 import TermsAcceptance from '../../components/checkout/TermsAcceptance';
+import PaymentSuccess from '../../components/checkout/PaymentSuccess';
+import DeclineBanner from '../../components/checkout/DeclineBanner';
 import Card from '../../components/common/Card';
 import Button from '../../components/common/Button';
 import FormAlert from '../../components/common/FormAlert';
@@ -32,8 +34,7 @@ function CheckoutWallet() {
   const [isLoading, setIsLoading] = useState(true);
   const [isPaying, setIsPaying] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // Read by Task 11's success/decline views; this task only wires the
-  // submission through and keeps the payload around for them.
+  // Drives PaymentSuccess when approved, DeclineBanner otherwise.
   const [result, setResult] = useState<CheckoutResult | null>(null);
 
   // Split from canPay: whether the Brick/pay-button unlock is a function of
@@ -110,6 +111,18 @@ function CheckoutWallet() {
     if (field === 'saveCard') setSaveCard(value);
   };
 
+  if (result?.status === 'approved') {
+    return (
+      <CheckoutLayout
+        title="Pago confirmado"
+        subtitle="Gracias por entrenar con nosotros."
+        summary={summary}
+      >
+        <PaymentSuccess result={result} />
+      </CheckoutLayout>
+    );
+  }
+
   return (
     <CheckoutLayout
       title="Pagá tu membresía"
@@ -126,16 +139,9 @@ function CheckoutWallet() {
           <div className="space-y-5">
             <FormAlert type="error" message={error} />
 
-            {result && (
-              <FormAlert
-                type={result.status === 'approved' ? 'success' : 'error'}
-                message={
-                  result.status === 'approved'
-                    ? 'Pago aprobado. Ya podés volver a tu panel.'
-                    : 'El pago no pudo aprobarse. Revisá los datos e intentá de nuevo.'
-                }
-              />
-            )}
+            {/* The 'approved' case already returned above, so anything
+                reaching here is a decline or an in-process payment. */}
+            {result && <DeclineBanner result={result} />}
 
             <PaymentMethodChoice
               card={card}

@@ -69,6 +69,24 @@ export interface ChargeSavedCardInput {
   idempotencyKey: string;
 }
 
+export interface ChargeCardTokenInput {
+  token: string;
+  /** Amount to charge, in the account's currency units (e.g. ARS, not cents). */
+  amount: number;
+  description?: string;
+  /** Maps the payment back to its ChargeOrder if the local write fails. */
+  externalReference: string;
+  idempotencyKey: string;
+  /**
+   * Present only when the member asked to save the card: scoping the payment
+   * to a Mercado Pago customer is what attaches the card to it, since the
+   * token itself is single-use and is spent by this charge.
+   */
+  customerId?: string;
+  /** Used as the payer when there is no customer. */
+  payerEmail?: string;
+}
+
 /** Normalized shape for both `chargeSavedCard` and `getPayment`. */
 export interface MpPaymentResult {
   id: string;
@@ -363,6 +381,48 @@ export class MercadoPagoClient {
       return this.normalizePayment(payment);
     } catch (err) {
       throw this.wrapError('chargeSavedCard', err);
+    }
+  }
+
+  /**
+   * Charges a card the member has just entered, using the single-use token the
+   * Card Payment Brick minted in their browser. Unlike `chargeSavedCard`, no
+   * token is minted here — the browser already did it, and this token cannot
+   * be reused afterwards.
+   *
+   * A declined card resolves normally with `status: 'rejected'`; only a
+   * failure to complete the call at all throws.
+   */
+  async chargeCardToken(input: ChargeCardTokenInput): Promise<MpPaymentResult> {
+    const sdkConfig = this.getSdkConfig();
+    const {
+      token,
+      amount,
+      description,
+      externalReference,
+      idempotencyKey,
+      customerId,
+      payerEmail,
+    } = input;
+    try {
+      const paymentClient = new Payment(sdkConfig);
+      const payment = await paymentClient.create({
+        body: {
+          transaction_amount: amount,
+          token,
+          description,
+          external_reference: externalReference,
+          payer: customerId
+            ? { type: 'customer', id: customerId }
+            : { email: payerEmail },
+          installments: 1,
+          capture: true,
+        },
+        requestOptions: { idempotencyKey },
+      });
+      return this.normalizePayment(payment);
+    } catch (err) {
+      throw this.wrapError('chargeCardToken', err);
     }
   }
 

@@ -4,10 +4,14 @@ import Card from '../common/Card';
 import Button from '../common/Button';
 import FormAlert from '../common/FormAlert';
 import ConfirmDialog from '../admin/ConfirmDialog';
-import SavedCardForm from './SavedCardForm';
+import CardForm from '../checkout/CardForm';
 import { formatCardLabel, cardExpiryWarning } from './saved-card';
 import { getMyPayments } from '../../services/payment.service';
-import { getMySavedCard, deleteCard } from '../../services/savedCard.service';
+import {
+  getMySavedCard,
+  deleteCard,
+  saveCard,
+} from '../../services/savedCard.service';
 import {
   getMySubscription,
   setAutoRenew,
@@ -76,6 +80,18 @@ const PaymentsSection = () => {
     setShowCardForm(false);
     setCardError(null);
     setCardSuccess('Tarjeta guardada correctamente.');
+  };
+
+  const handleTokenSaved = async (token: string) => {
+    setCardError(null);
+    try {
+      const savedCard = await saveCard(token);
+      handleCardSaved(savedCard);
+    } catch (err) {
+      setCardError(
+        err instanceof Error ? err.message : 'No se pudo guardar la tarjeta.',
+      );
+    }
   };
 
   const confirmDeleteCard = async () => {
@@ -199,7 +215,11 @@ const PaymentsSection = () => {
 
         {!isLoading && (showCardForm || !card) && (
           <div className="mt-4">
-            <SavedCardForm onSaved={handleCardSaved} amount={cardFormAmount} />
+            <CardForm
+              amount={cardFormAmount}
+              onToken={(token) => void handleTokenSaved(token)}
+              onError={setCardError}
+            />
             {card && (
               <Button
                 variant="secondary"

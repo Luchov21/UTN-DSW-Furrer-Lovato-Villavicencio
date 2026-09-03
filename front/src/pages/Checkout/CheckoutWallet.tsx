@@ -65,6 +65,11 @@ function CheckoutWallet() {
   const pay = useCallback(
     async (cardToken?: string) => {
       if (!planId) return;
+      // Reentrancy guard: the Brick's own submit-button lock releases as
+      // soon as onToken (synchronous) returns, well before this async call
+      // finishes — without this check a double-click can fire two
+      // concurrent charges.
+      if (isPaying) return;
       setIsPaying(true);
       setError(null);
       try {
@@ -85,7 +90,7 @@ function CheckoutWallet() {
         setIsPaying(false);
       }
     },
-    [planId, months, useSavedCard, saveCard],
+    [planId, months, useSavedCard, saveCard, isPaying],
   );
 
   // A charge in flight must not be abandoned by a stray back/refresh.

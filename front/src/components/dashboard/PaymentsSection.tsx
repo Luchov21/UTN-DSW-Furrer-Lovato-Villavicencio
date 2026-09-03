@@ -44,6 +44,7 @@ const PaymentsSection = () => {
   const [showCardForm, setShowCardForm] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [isSavingCard, setIsSavingCard] = useState(false);
   const [cardError, setCardError] = useState<string | null>(null);
   const [cardSuccess, setCardSuccess] = useState<string | null>(null);
   const [isTogglingAutoRenew, setIsTogglingAutoRenew] = useState(false);
@@ -83,6 +84,11 @@ const PaymentsSection = () => {
   };
 
   const handleTokenSaved = async (token: string) => {
+    // Reentrancy guard: CardForm's onToken fires as soon as the Brick's
+    // synchronous onSubmit returns, well before this call finishes — without
+    // this check a double-click could fire two concurrent saves.
+    if (isSavingCard) return;
+    setIsSavingCard(true);
     setCardError(null);
     try {
       const savedCard = await saveCard(token);
@@ -91,6 +97,8 @@ const PaymentsSection = () => {
       setCardError(
         err instanceof Error ? err.message : 'No se pudo guardar la tarjeta.',
       );
+    } finally {
+      setIsSavingCard(false);
     }
   };
 
@@ -215,16 +223,24 @@ const PaymentsSection = () => {
 
         {!isLoading && (showCardForm || !card) && (
           <div className="mt-4">
+            {isSavingCard && (
+              <div className="mb-3 flex items-center gap-2 text-sm text-text-muted">
+                <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                Guardando tarjeta...
+              </div>
+            )}
             <CardForm
               amount={cardFormAmount}
               onToken={(token) => void handleTokenSaved(token)}
               onError={setCardError}
+              isBusy={isSavingCard}
             />
             {card && (
               <Button
                 variant="secondary"
                 size="sm"
                 className="mt-3"
+                disabled={isSavingCard}
                 onClick={() => setShowCardForm(false)}
               >
                 Cancelar

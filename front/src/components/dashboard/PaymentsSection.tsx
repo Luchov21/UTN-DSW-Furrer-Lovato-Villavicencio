@@ -27,6 +27,9 @@ const stateBadge: Record<string, string> = {
 
 const PAGE_SIZE = 5;
 
+// Fallback ARS amount for a member with no active plan; see cardFormAmount.
+const DEFAULT_CARD_AMOUNT = 10000;
+
 const PaymentsSection = () => {
   const [payments, setPayments] = useState<Payment[]>([]);
   const [card, setCard] = useState<SavedCard | null>(null);
@@ -116,6 +119,11 @@ const PaymentsSection = () => {
 
   const expiryWarning = card ? cardExpiryWarning(card, new Date()) : null;
 
+  // A member with no active plan still needs a valid amount for the Brick to
+  // price installments against; their plan price is the honest default and
+  // DEFAULT_CARD_AMOUNT covers the no-subscription case.
+  const cardFormAmount = subscription?.plan?.price ?? DEFAULT_CARD_AMOUNT;
+
   const pagedPayments = payments.slice(pageOffset, pageOffset + PAGE_SIZE);
   const paymentsFrom = payments.length === 0 ? 0 : pageOffset + 1;
   const paymentsTo = Math.min(pageOffset + PAGE_SIZE, payments.length);
@@ -191,7 +199,7 @@ const PaymentsSection = () => {
 
         {!isLoading && (showCardForm || !card) && (
           <div className="mt-4">
-            <SavedCardForm onSaved={handleCardSaved} />
+            <SavedCardForm onSaved={handleCardSaved} amount={cardFormAmount} />
             {card && (
               <Button
                 variant="secondary"

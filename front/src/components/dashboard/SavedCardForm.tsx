@@ -17,9 +17,15 @@ if (isConfigured) {
 
 interface SavedCardFormProps {
   onSaved: (card: SavedCard) => void;
+  // A real, chargeable ARS amount — the member's current plan price. The
+  // Brick prices installments against this before it will tokenize, and a
+  // nominal 1 falls under Mercado Pago's ARS minimum, which is what made it
+  // refuse every card with "Could not obtain payment information".
+  // Nothing is charged here: onSubmit only reads formData.token.
+  amount: number;
 }
 
-const SavedCardForm = ({ onSaved }: SavedCardFormProps) => {
+const SavedCardForm = ({ onSaved, amount }: SavedCardFormProps) => {
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -64,10 +70,7 @@ const SavedCardForm = ({ onSaved }: SavedCardFormProps) => {
         </div>
       )}
       <CardPayment
-        // amount is a placeholder, not a real charge: this flow only
-        // tokenizes the card to save it, it never processes a payment. MP's
-        // own docs use 1 as the nominal amount for pure tokenization.
-        initialization={{ amount: 1 }}
+        initialization={{ amount }}
         onSubmit={handleSubmit}
         onError={(err) => {
           setError(getApiErrorMessage(err, 'No se pudo guardar la tarjeta.'));

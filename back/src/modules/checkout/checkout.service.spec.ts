@@ -242,6 +242,24 @@ describe('CheckoutService.pay', () => {
     ).rejects.toBeInstanceOf(ConflictException);
   });
 
+  it('closes the order when the member has no usable saved card', async () => {
+    savedCards.findActiveForUser.mockResolvedValue(null);
+
+    await expect(
+      service.pay(3, 'rosa@gmail.com', {
+        planId: 12,
+        months: 1,
+        useSavedCard: true,
+        acceptedTerms: true,
+      }),
+    ).rejects.toBeInstanceOf(ConflictException);
+
+    expect(chargeOrders.closeAsError).toHaveBeenCalledWith(
+      'flg-user-3-abcd1234',
+      'No tenés una tarjeta guardada que se pueda usar. Ingresá una nueva.',
+    );
+  });
+
   it('saves the card and enables auto-renew when asked', async () => {
     await service.pay(3, 'rosa@gmail.com', { ...dto, saveCard: true });
 

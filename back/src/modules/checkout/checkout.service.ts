@@ -101,6 +101,17 @@ export class CheckoutService {
           'No pudimos conectarnos con Mercado Pago. Volvé a intentar en unos minutos.',
         );
       }
+      if (error instanceof ConflictException) {
+        // No charge was ever attempted on this path, so there is no webhook
+        // retry coming to let ChargeOrderResolverAdapter resolve this order
+        // later — and 'online' orders skip the expireStale() sweep (Task 2),
+        // so leaving it PENDING here would strand it forever. Closing it is
+        // safe precisely because nothing was charged.
+        await this.chargeOrderService.closeAsError(
+          order.externalReference,
+          error.message,
+        );
+      }
       throw error;
     }
 

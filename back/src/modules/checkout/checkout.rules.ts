@@ -18,6 +18,18 @@ export interface CheckoutSummary {
   availableMonths: number[];
 }
 
+export interface CheckoutResult {
+  status: 'approved' | 'rejected' | 'in_process';
+  /** Mercado Pago's raw status_detail — the frontend maps it to Spanish. */
+  statusDetail?: string;
+  paymentId?: number;
+  /** 'YYYY-MM-DD'. Present only when approved. */
+  newEndDate?: string;
+  planName?: string;
+  amount?: number;
+  months?: number;
+}
+
 /**
  * The priced summary of selling `plan` for `months`, and every term the plan
  * offers. Pure — the caller loads the plan and its durations.

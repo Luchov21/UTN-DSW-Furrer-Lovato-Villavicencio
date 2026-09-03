@@ -8,6 +8,7 @@ import Classes from '../pages/Classes/Classes';
 import About from '../pages/About/About';
 import Contact from '../pages/Contact/Contact';
 import Plan from '../pages/Plan/Plan';
+import Checkout from '../pages/Checkout/Checkout';
 import NotFound from '../pages/NotFound/NotFound';
 import Trainers from '../pages/Trainers/Trainers';
 import Dashboard from '../pages/Dashboard/Dashboard';
@@ -55,6 +56,10 @@ export const router = createBrowserRouter([
       {
         path: '/membership',
         element: <Plan />,
+      },
+      {
+        path: '/checkout',
+        element: <Checkout />,
       },
       {
         path: '/trainers',

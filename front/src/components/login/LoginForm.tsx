@@ -11,7 +11,14 @@ import { useAuth } from '../../context/useAuth';
 // Simple RFC 5322 regex for client-side email format validation
 const EMAIL_REGEX = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
 
-const LoginForm = () => {
+interface LoginFormProps {
+  // Lets an embedding flow (checkout) take over where the member lands next
+  // instead of the default redirect. Callers that don't pass it keep the
+  // existing behavior unchanged.
+  onSuccess?: () => void;
+}
+
+const LoginForm = ({ onSuccess }: LoginFormProps) => {
   const navigate = useNavigate();
   const location = useLocation();
   const { login } = useAuth();
@@ -81,9 +88,15 @@ const LoginForm = () => {
         localStorage.removeItem('rememberedEmail');
       }
 
-      setTimeout(() => {
-        navigate(from, { replace: true });
-      }, 800);
+      // An embedding flow (checkout) takes over navigation itself; the
+      // default redirect-after-a-beat only applies to standalone use.
+      if (onSuccess) {
+        onSuccess();
+      } else {
+        setTimeout(() => {
+          navigate(from, { replace: true });
+        }, 800);
+      }
     } catch (err: unknown) {
       const message =
         err instanceof Error

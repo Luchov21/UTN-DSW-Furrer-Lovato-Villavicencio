@@ -5,10 +5,18 @@ import Card from '../common/Card';
 import CompleteProfileForm from './CompleteProfileForm';
 import { useAuth } from '../../context/useAuth';
 
+interface CompleteProfileSectionProps {
+  // Where to send the member once both gates are clear. Defaults to
+  // /dashboard for every caller that doesn't come from checkout.
+  returnTo?: string;
+}
+
 // Deliberately NOT wrapped in ProtectedRoute — that component is what
 // redirects *to* here, so wrapping this one would loop. It does its own two
 // checks instead, and the second is what makes the screen appear exactly once.
-const CompleteProfileSection = () => {
+const CompleteProfileSection = ({
+  returnTo = '/dashboard',
+}: CompleteProfileSectionProps) => {
   const { isAuthenticated, isProfileComplete, mustChangePassword } =
     useAuth();
 
@@ -19,7 +27,7 @@ const CompleteProfileSection = () => {
   // Shows while either gate is closed — ProtectedRoute redirects here for
   // both reasons, and CompleteProfileForm renders whichever section(s) apply.
   if (isProfileComplete && !mustChangePassword) {
-    return <Navigate to="/dashboard" replace />;
+    return <Navigate to={returnTo} replace />;
   }
 
   // A member with a complete profile who only needs to replace a temporary
@@ -45,7 +53,7 @@ const CompleteProfileSection = () => {
             </p>
           </div>
 
-          <CompleteProfileForm />
+          <CompleteProfileForm returnTo={returnTo} />
         </Card>
       </div>
     </Container>

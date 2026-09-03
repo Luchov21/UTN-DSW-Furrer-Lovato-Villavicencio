@@ -633,7 +633,6 @@ describe('subscriptionController authorization', () => {
       {
         provide: subscriptionService,
         useValue: {
-          changePlan: jest.fn().mockResolvedValue({}),
           assignPlanToMember: jest.fn().mockResolvedValue({}),
           findActiveForUser: jest.fn().mockResolvedValue({}),
           createSubscription: jest.fn().mockResolvedValue({}),
@@ -659,10 +658,35 @@ describe('subscriptionController authorization', () => {
     await app.close();
   });
 
-  it('opens POST /subscription/change-plan to any logged-in caller', async () => {
-    await anyLoggedIn(app, 'post', '/api/v1/subscription/change-plan', {
-      planId: 1,
-    });
+  // There is deliberately no member-facing change-plan route anymore: a
+  // member's subscription is created or extended only by a paid checkout or
+  // by an admin. This asserts the route is gone for every actor, not merely
+  // guarded — a 404 happens before any guard runs, so this fails if the
+  // handler is ever "restored" behind a role check instead of removed.
+  it('no longer exposes a member-facing change-plan route', async () => {
+    const body = { planId: 1 };
+
+    await call(
+      app,
+      'post',
+      '/api/v1/subscription/change-plan',
+      ANONYMOUS,
+      body,
+    ).expect(404);
+    await call(
+      app,
+      'post',
+      '/api/v1/subscription/change-plan',
+      tokenFor('member'),
+      body,
+    ).expect(404);
+    await call(
+      app,
+      'post',
+      '/api/v1/subscription/change-plan',
+      tokenFor('admin'),
+      body,
+    ).expect(404);
   });
 
   it('restricts POST /subscription/admin/:id to an admin', async () => {

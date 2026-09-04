@@ -18,6 +18,7 @@ export interface PersistableCard {
   id: string;
   lastFourDigits: string;
   paymentMethodId: string;
+  paymentTypeId: string | null;
   expirationMonth: number;
   expirationYear: number;
 }
@@ -61,6 +62,7 @@ export class SavedCardService {
         mpCardId: card.id,
         lastFourDigits: card.lastFourDigits,
         paymentMethodId: card.paymentMethodId,
+        paymentTypeId: card.paymentTypeId,
         expirationMonth: card.expirationMonth,
         expirationYear: card.expirationYear,
         active: true,
@@ -119,6 +121,11 @@ export class SavedCardService {
       paymentMethodId: mpCard.paymentMethodId,
       expirationMonth: mpCard.expirationMonth,
       expirationYear: mpCard.expirationYear,
+      // The classic Customers API's card-creation response carries no
+      // credit/debit type. A card saved through this path is not chargeable
+      // by the renewal cron until the member goes through checkout's
+      // save-card flow instead (Task 9), which does capture it.
+      paymentTypeId: null,
     });
   }
 

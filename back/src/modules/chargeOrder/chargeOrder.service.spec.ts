@@ -448,6 +448,39 @@ describe('ChargeOrderService.createCharge', () => {
       }),
     );
   });
+
+  it('uses a caller-supplied external reference when given one', async () => {
+    await buildService();
+
+    const saved = await service.createCharge({
+      userId: 7,
+      planId: 12,
+      months: 1,
+      amount: 19995,
+      method: 'online',
+      collectionPointId: null,
+      adminId: null,
+      externalReference: 'flg-user-7-a1b2c3d4',
+    });
+
+    expect(saved.externalReference).toBe('flg-user-7-a1b2c3d4');
+  });
+
+  it('still mints one when the caller supplies none', async () => {
+    await buildService();
+
+    const saved = await service.createCharge({
+      userId: 7,
+      planId: 12,
+      months: 1,
+      amount: 19995,
+      method: 'online',
+      collectionPointId: null,
+      adminId: null,
+    });
+
+    expect(saved.externalReference).toMatch(/^flg-user-7-[a-f0-9]{8}$/);
+  });
 });
 
 describe('ChargeOrderService.findByExternalReference', () => {

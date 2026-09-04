@@ -32,6 +32,14 @@ export interface CreateChargeParams {
   collectionPointId: string | null;
   // Null only for 'online' — self-service, no admin involved.
   adminId: number | null;
+  /**
+   * Supplied only by the online wallet path, which mints the reference when
+   * it creates the Mercado Pago preference and needs the row to carry the
+   * same one — the webhook resolves a payment through it. Every other caller
+   * omits it and gets a freshly minted reference. The column's unique
+   * constraint enforces the invariant either way.
+   */
+  externalReference?: string;
 }
 
 // Front-desk bookkeeping for card-terminal ("point") and QR charges. This is
@@ -67,6 +75,7 @@ export class ChargeOrderService {
       method,
       collectionPointId,
       adminId,
+      externalReference: suppliedExternalReference,
     } = params;
 
     // Defense in depth for the pairing the rest of this method assumes:
@@ -132,10 +141,9 @@ export class ChargeOrderService {
     }
 
     const now = new Date();
-    const externalReference = buildExternalReference(
-      userId,
-      randomUUID().slice(0, 8),
-    );
+    const externalReference =
+      suppliedExternalReference ??
+      buildExternalReference(userId, randomUUID().slice(0, 8));
 
     // The busy check and the insert MUST run as one atomic unit: two
     // near-simultaneous createCharge calls for the same collectionPointId (a

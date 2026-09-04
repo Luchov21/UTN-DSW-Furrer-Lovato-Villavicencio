@@ -274,6 +274,10 @@ describe('CheckoutService.pay', () => {
         cardId: 'card_1',
         paymentMethodId: 'visa',
         paymentTypeId: 'credit_card',
+        // Without this, an order created for a saved-card charge carries no
+        // external_reference, so a lost synchronous response can never be
+        // recovered by the webhook.
+        externalReference: 'flg-user-3-abcd1234',
       }),
     );
     expect(mercadoPago.chargeCardToken).not.toHaveBeenCalled();

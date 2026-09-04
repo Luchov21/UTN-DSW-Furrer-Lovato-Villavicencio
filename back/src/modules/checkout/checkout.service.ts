@@ -192,6 +192,7 @@ export class CheckoutService {
       cardId: card.mpCardId,
       amount: summary.total,
       description: `Membresía FLG — ${summary.planName}`,
+      externalReference,
       idempotencyKey: `checkout-${externalReference}`,
       paymentMethodId: card.paymentMethodId,
       // isChargeable (checked above) guarantees paymentTypeId is non-null.

@@ -97,6 +97,7 @@ export class PaymentService {
     amount: number;
     payMethod: string;
     registeredById?: number | null;
+    mpOrderId?: string | null;
   }): Promise<{ payment: Payment; subscription: Subscription }> {
     // Idempotency first: Mercado Pago retries a notification up to eight
     // times over four days, and a retry must not sell the plan twice.
@@ -131,6 +132,7 @@ export class PaymentService {
           date: new Date(),
           state: PaymentState.COMPLETED,
           registeredById: input.registeredById ?? null,
+          mpOrderId: input.mpOrderId ?? null,
           termMonths: term.months,
           // Same convention as createFromMercadoPago: the plan's monthly list
           // price, not the discounted amount.
@@ -223,6 +225,7 @@ export class PaymentService {
       date: new Date(),
       state: PaymentState.COMPLETED,
       registeredById: dto.registeredById ?? null,
+      mpOrderId: dto.mpOrderId ?? null,
       termMonths: dto.termMonths,
       monthlyPriceAtPurchase: subscription.plan.price,
       deleted: false,

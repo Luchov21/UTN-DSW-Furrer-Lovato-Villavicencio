@@ -391,6 +391,31 @@ describe('createFromMercadoPago', () => {
     expect(result).toBeDefined();
   });
 
+  it('persists mpOrderId from the dto', async () => {
+    subscriptions = {
+      findSubscription: jest.fn().mockResolvedValue({
+        id: 44,
+        state: SubscriptionState.PENDING,
+        deleted: false,
+        plan,
+      }),
+      activate: jest.fn().mockResolvedValue(undefined),
+      renew: jest.fn().mockResolvedValue(undefined),
+    };
+    await buildService(null);
+
+    const payment = await service.createFromMercadoPago({
+      mpPaymentId: 'mp-2',
+      subscriptionId: 44,
+      amount: 10000,
+      termMonths: 1,
+      payMethod: 'mercadopago',
+      mpOrderId: 'ORD02',
+    });
+
+    expect(payment.mpOrderId).toBe('ORD02');
+  });
+
   it('renews instead of activating when the subscription is already active', async () => {
     subscriptions = {
       findSubscription: jest.fn().mockResolvedValue({
@@ -1093,6 +1118,23 @@ describe('PaymentService.confirmPlanCharge', () => {
     await expect(service.confirmPlanCharge(input)).rejects.toBeInstanceOf(
       NotFoundException,
     );
+  });
+
+  it('persists mpOrderId on the payment when the caller supplies one', async () => {
+    // (Reuse whatever plan/duration/subscription mocks the surrounding
+    // describe block's beforeEach already sets up for a successful charge —
+    // this test only adds the new field and reads it back off the saved row.)
+    const { payment } = await service.confirmPlanCharge({
+      mpPaymentId: 'mp-1',
+      userId: 3,
+      planId: 12,
+      months: 1,
+      amount: 19995,
+      payMethod: 'mercadopago',
+      mpOrderId: 'ORD01',
+    });
+
+    expect(payment.mpOrderId).toBe('ORD01');
   });
 });
 

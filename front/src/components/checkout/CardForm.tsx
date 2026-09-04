@@ -38,11 +38,12 @@ const CardForm = ({ amount, onToken, onError, isBusy }: CardFormProps) => {
     );
   }
 
-  // Only these three fields are read: the PAN, the CVV and every other
-  // field the Brick's callback returns stay in the browser and never reach
-  // our backend. payment_method_id/payment_type_id are not PCI-sensitive —
-  // they're the card's brand and type (e.g. "visa"/"credit_card"), which
-  // Mercado Pago's Orders API needs explicitly to charge the token.
+  // Only `token`, `payment_method_id` and `payment_type_id` are read from the
+  // Brick's callback. The PAN, the CVV and every other field it returns stay
+  // in the browser and never reach our backend. payment_method_id/
+  // payment_type_id are not PCI-sensitive — they're the card's brand and
+  // type (e.g. "visa"/"credit_card"), which Mercado Pago's Orders API needs
+  // explicitly to charge the token.
   const handleSubmit = async (formData: {
     token: string;
     payment_method_id: string;

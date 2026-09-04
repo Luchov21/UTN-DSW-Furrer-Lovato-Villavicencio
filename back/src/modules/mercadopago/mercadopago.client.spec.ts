@@ -52,6 +52,15 @@ interface CardLike {
 let customerCreateCard: jest.Mock<Promise<CardLike>, [unknown]>;
 let customerListCards: jest.Mock<Promise<CardLike[]>, [unknown]>;
 
+// Loosely typed, like `orderRefund` above — the tests below only ever
+// resolve/reject it with a plain object, never assert on its own type.
+let preferenceCreate: jest.Mock;
+
+/** Mirrors how `Customer.createCard`/`Customer.listCards` are swapped in above. */
+function mockPreferenceCreate(impl: jest.Mock): void {
+  preferenceCreate = impl;
+}
+
 jest.mock('mercadopago', () => ({
   __esModule: true,
   default: jest.fn().mockImplementation(() => ({})),
@@ -67,6 +76,9 @@ jest.mock('mercadopago', () => ({
     get: jest.fn(),
     cancel: jest.fn(),
     refund: orderRefund,
+  })),
+  Preference: jest.fn().mockImplementation(() => ({
+    create: preferenceCreate,
   })),
 }));
 
@@ -608,6 +620,54 @@ describe('MercadoPagoClient', () => {
       await expect(
         client.refundOrder('ORD01', 'PAY01', 7000, 'refund-55'),
       ).rejects.toBeInstanceOf(MercadoPagoUnavailableError);
+    });
+  });
+
+  describe('createPreference', () => {
+    const input = {
+      planName: 'Plan Full',
+      amount: 19995,
+      externalReference: 'flg-user-7-a1b2c3d4',
+      payerEmail: 'socio@example.com',
+      frontendUrl: 'https://flg.example.com',
+      now: new Date('2026-09-04T12:00:00.000Z'),
+    };
+
+    it('sends the built body and returns the id and init point', async () => {
+      const create = jest.fn().mockResolvedValue({
+        id: 'pref-123',
+        init_point: 'https://mp.example.com/checkout?pref_id=pref-123',
+      });
+      mockPreferenceCreate(create);
+
+      const result = await client.createPreference(input);
+
+      expect(create).toHaveBeenCalledWith({
+        body: expect.objectContaining({
+          purpose: 'wallet_purchase',
+          external_reference: 'flg-user-7-a1b2c3d4',
+        }) as Record<string, unknown>,
+      });
+      expect(result).toEqual({
+        id: 'pref-123',
+        initPoint: 'https://mp.example.com/checkout?pref_id=pref-123',
+      });
+    });
+
+    it('throws MercadoPagoUnavailableError when the SDK rejects', async () => {
+      mockPreferenceCreate(jest.fn().mockRejectedValue(new Error('boom')));
+
+      await expect(client.createPreference(input)).rejects.toBeInstanceOf(
+        MercadoPagoUnavailableError,
+      );
+    });
+
+    it('refuses a response with no preference id rather than returning undefined', async () => {
+      mockPreferenceCreate(jest.fn().mockResolvedValue({}));
+
+      await expect(client.createPreference(input)).rejects.toBeInstanceOf(
+        MercadoPagoUnavailableError,
+      );
     });
   });
 });

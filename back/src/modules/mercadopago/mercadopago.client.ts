@@ -5,7 +5,12 @@ import MpSdkConfig, {
   Order,
   Payment,
   PaymentRefund,
+  Preference,
 } from 'mercadopago';
+import {
+  buildPreferenceBody,
+  type PreferenceBodyInput,
+} from '../checkout/checkout-preference.rules';
 import { MercadoPagoConfig } from './mercadopago.config';
 
 /**
@@ -185,6 +190,12 @@ export interface MpRefundResult {
   id: string;
   status?: string;
   amount?: number;
+}
+
+export interface MpPreferenceResult {
+  id: string;
+  /** Checkout Pro's hosted URL. Only used by the A1 fallback (see the spec). */
+  initPoint?: string;
 }
 
 export interface MpOrderResult {
@@ -402,6 +413,46 @@ export class MercadoPagoClient {
       return { id: created.id, email: created.email };
     } catch (err) {
       throw this.wrapError('findOrCreateCustomer', err);
+    }
+  }
+
+  /**
+   * Creates the preference that backs the Payment Brick's Mercado Pago
+   * option. The body is built by a pure function so its rules are tested
+   * without a network; this method only talks to the SDK.
+   *
+   * The caller must have resolved the price itself — `input.amount` is the
+   * server's number, never the browser's.
+   */
+  async createPreference(
+    input: PreferenceBodyInput,
+  ): Promise<MpPreferenceResult> {
+    const sdkConfig = this.getSdkConfig();
+    try {
+      const preferenceClient = new Preference(sdkConfig);
+      const preferenceBody = buildPreferenceBody(input);
+      const created = await preferenceClient.create({
+        body: {
+          ...preferenceBody,
+          // The installed SDK's `Items` type requires an `id` per line item;
+          // the Preferences API itself does not. `buildPreferenceBody`
+          // (Task 3) deliberately omits it — this preference always has
+          // exactly one item, already identified end-to-end by
+          // `external_reference`, not a catalog id. The index-based value
+          // below exists only to satisfy the SDK's type, the same class of
+          // types-lag-the-API gap as `createOrder`'s `config` cast above.
+          items: preferenceBody.items.map((item, index) => ({
+            ...item,
+            id: String(index),
+          })),
+        },
+      });
+      if (!created.id) {
+        throw new Error('Mercado Pago did not return a preference id.');
+      }
+      return { id: created.id, initPoint: created.init_point };
+    } catch (err) {
+      throw this.wrapError('createPreference', err);
     }
   }
 

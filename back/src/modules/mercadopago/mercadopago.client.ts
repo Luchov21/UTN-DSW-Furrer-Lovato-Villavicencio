@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import MpSdkConfig, {
   CardToken,
   Customer,
@@ -86,17 +86,16 @@ export interface MpSavedCard {
   lastFourDigits?: string;
   /** e.g. `visa`, `master` — nested under `payment_method` in the raw response. */
   paymentMethodId?: string;
+  /**
+   * `credit_card`/`debit_card` — also nested under `payment_method` in the
+   * raw response. Both `saveCard` (the classic Customers API) and `getCard`
+   * (listing a customer's saved cards) return it; a card saved through
+   * `saveCard` with this left unset is permanently unchargeable by
+   * `isChargeable`, so mapping it is not optional.
+   */
+  paymentTypeId?: string;
   expirationMonth?: number;
   expirationYear?: number;
-}
-
-/** Shape of one entry in `GET /v1/customers/{customer_id}/cards`'s raw response. */
-interface RawCard {
-  id?: string;
-  last_four_digits?: string;
-  payment_method?: { id?: string };
-  expiration_month?: number;
-  expiration_year?: number;
 }
 
 export interface ChargeSavedCardInput {
@@ -105,6 +104,8 @@ export interface ChargeSavedCardInput {
   /** Amount to charge, in the account's currency units (e.g. ARS, not cents). */
   amount: number;
   description?: string;
+  /** Maps the payment back to its ChargeOrder if the local write fails. */
+  externalReference?: string;
   idempotencyKey: string;
   /** Card brand, e.g. `master` — from the SavedCard row. */
   paymentMethodId: string;
@@ -256,6 +257,9 @@ type SdkCustomerResponse = Awaited<
 type SdkCardResponse = Awaited<
   ReturnType<InstanceType<typeof Customer>['createCard']>
 >;
+type SdkCardListResponse = Awaited<
+  ReturnType<InstanceType<typeof Customer>['listCards']>
+>;
 type SdkCardTokenResponse = Awaited<
   ReturnType<InstanceType<typeof CardToken>['create']>
 >;
@@ -284,6 +288,8 @@ type SdkOrderCreateBody = Parameters<
  */
 @Injectable()
 export class MercadoPagoClient {
+  private readonly logger = new Logger(MercadoPagoClient.name);
+
   /** Memoized on first `getSdkConfig()` call — never built while disabled. */
   private sdkConfig?: MpSdkConfig;
 
@@ -418,6 +424,7 @@ export class MercadoPagoClient {
         id: card.id,
         lastFourDigits: card.last_four_digits,
         paymentMethodId: card.payment_method?.id,
+        paymentTypeId: card.payment_method?.payment_type_id,
         expirationMonth: card.expiration_month,
         expirationYear: card.expiration_year,
       };
@@ -442,51 +449,33 @@ export class MercadoPagoClient {
    * response echoes the new card's id (`payment_method.card_id`) but not its
    * last-four-digits/expiration, so this fills in the rest — one call, only
    * on the save-card path, never in the common (no-save) charge path.
-   *
-   * Not covered by the `mercadopago` SDK (no list-cards client exists) — a
-   * raw fetch, same pattern as `MercadoPagoTerminalPrinterClient` uses for
-   * its own SDK-uncovered endpoint.
    */
   async getCard(
     customerId: string,
     cardId: string,
   ): Promise<MpSavedCard | undefined> {
-    // Reuses the same enabled/configured guard every other method gets from
-    // getSdkConfig(), even though this call doesn't use the SDK client.
-    this.getSdkConfig();
-    const accessToken = this.config.accessToken as string;
-
-    let response: Response;
+    const sdkConfig = this.getSdkConfig();
     try {
-      response = await fetch(
-        `https://api.mercadopago.com/v1/customers/${customerId}/cards`,
-        { headers: { Authorization: `Bearer ${accessToken}` } },
-      );
+      const customerClient = new Customer(sdkConfig);
+      const cards: SdkCardListResponse = await customerClient.listCards({
+        customerId,
+      });
+      const card = cards.find((c) => c.id === cardId);
+      if (!card?.id) {
+        return undefined;
+      }
+
+      return {
+        id: card.id,
+        lastFourDigits: card.last_four_digits,
+        paymentMethodId: card.payment_method?.id,
+        paymentTypeId: card.payment_method?.payment_type_id,
+        expirationMonth: card.expiration_month,
+        expirationYear: card.expiration_year,
+      };
     } catch (err) {
       throw this.wrapError('getCard', err);
     }
-
-    if (!response.ok) {
-      const text = await response.text().catch(() => '');
-      throw this.wrapError('getCard', {
-        status: response.status,
-        causes: [text],
-      });
-    }
-
-    const cards = (await response.json()) as RawCard[];
-    const card = cards.find((c) => c.id === cardId);
-    if (!card) {
-      return undefined;
-    }
-
-    return {
-      id: card.id as string,
-      lastFourDigits: card.last_four_digits,
-      paymentMethodId: card.payment_method?.id,
-      expirationMonth: card.expiration_month,
-      expirationYear: card.expiration_year,
-    };
   }
 
   /**
@@ -551,16 +540,29 @@ export class MercadoPagoClient {
       let card: MpPaymentResult['card'];
       const cardId = txPayment.payment_method?.card_id;
       if (input.includeCardDetails && input.customerId && cardId) {
-        const savedCard = await this.getCard(input.customerId, cardId);
-        if (savedCard?.lastFourDigits !== undefined) {
-          card = {
-            id: savedCard.id,
-            lastFourDigits: savedCard.lastFourDigits,
-            paymentMethodId: savedCard.paymentMethodId,
-            paymentTypeId: input.paymentTypeId,
-            expirationMonth: savedCard.expirationMonth,
-            expirationYear: savedCard.expirationYear,
-          };
+        // The order already charged successfully by this point — a failure
+        // to fetch the card's display details afterward must not report an
+        // approved payment as an outage (that would close the ChargeOrder as
+        // ERROR with no recovery path, even though the money already moved).
+        // rememberCard in checkout.service.ts already handles `card ===
+        // undefined` by logging and skipping the save.
+        try {
+          const savedCard = await this.getCard(input.customerId, cardId);
+          if (savedCard?.lastFourDigits !== undefined) {
+            card = {
+              id: savedCard.id,
+              lastFourDigits: savedCard.lastFourDigits,
+              paymentMethodId: savedCard.paymentMethodId,
+              paymentTypeId: input.paymentTypeId,
+              expirationMonth: savedCard.expirationMonth,
+              expirationYear: savedCard.expirationYear,
+            };
+          }
+        } catch (err) {
+          this.logger.warn(
+            `Approved order ${order.id} could not fetch card details for customer ${input.customerId}`,
+            err instanceof Error ? err.stack : err,
+          );
         }
       }
 
@@ -609,6 +611,7 @@ export class MercadoPagoClient {
       token: freshToken.id,
       amount,
       description,
+      externalReference: input.externalReference,
       idempotencyKey,
       customerId,
       paymentMethodId: input.paymentMethodId,

@@ -41,11 +41,25 @@ interface CardTokenLike {
 
 let cardTokenCreate: jest.Mock<Promise<CardTokenLike>, [CardTokenCreateArgs]>;
 
+interface CardLike {
+  id?: string;
+  last_four_digits?: string;
+  payment_method?: { id?: string; payment_type_id?: string };
+  expiration_month?: number;
+  expiration_year?: number;
+}
+
+let customerCreateCard: jest.Mock<Promise<CardLike>, [unknown]>;
+let customerListCards: jest.Mock<Promise<CardLike[]>, [unknown]>;
+
 jest.mock('mercadopago', () => ({
   __esModule: true,
   default: jest.fn().mockImplementation(() => ({})),
   Payment: jest.fn().mockImplementation(() => ({})),
-  Customer: jest.fn().mockImplementation(() => ({})),
+  Customer: jest.fn().mockImplementation(() => ({
+    createCard: customerCreateCard,
+    listCards: customerListCards,
+  })),
   CardToken: jest.fn().mockImplementation(() => ({ create: cardTokenCreate })),
   PaymentRefund: jest.fn().mockImplementation(() => ({})),
   Order: jest.fn().mockImplementation(() => ({
@@ -311,6 +325,52 @@ describe('MercadoPagoClient', () => {
       expect(getCardSpy).not.toHaveBeenCalled();
       expect(result.card).toBeUndefined();
     });
+
+    it('still resolves with the approved charge when the post-charge getCard lookup fails', async () => {
+      // The order already charged successfully by the time getCard runs — a
+      // lookup failure here must degrade to "no card details", never fail
+      // the whole charge and report an approved payment as an outage.
+      orderCreate.mockResolvedValue({
+        id: 'ORD07',
+        status: 'processed',
+        status_detail: 'accredited',
+        total_paid_amount: 19995,
+        transactions: {
+          payments: [
+            {
+              id: '129',
+              payment_method: {
+                id: 'visa',
+                type: 'credit_card',
+                card_id: 'card_9',
+              },
+            },
+          ],
+        },
+      });
+      jest
+        .spyOn(client, 'getCard')
+        .mockRejectedValue(new MercadoPagoUnavailableError('network hiccup'));
+
+      const result = await client.chargeCardToken({
+        token: 'tok_abc',
+        amount: 19995,
+        externalReference: 'flg-user-3-abcd1234',
+        idempotencyKey: 'checkout-tok_abc',
+        customerId: 'cus_1',
+        paymentMethodId: 'visa',
+        paymentTypeId: 'credit_card',
+      });
+
+      expect(result).toEqual(
+        expect.objectContaining({
+          id: '129',
+          status: 'approved',
+          mpOrderId: 'ORD07',
+        }),
+      );
+      expect(result.card).toBeUndefined();
+    });
   });
 
   describe('MercadoPagoClient.chargeSavedCard', () => {
@@ -355,6 +415,30 @@ describe('MercadoPagoClient', () => {
       expect(result).toEqual(
         expect.objectContaining({ id: '200', status: 'approved' }),
       );
+    });
+
+    it('forwards the external reference to the order, when given', async () => {
+      cardTokenCreate.mockResolvedValue({ id: 'fresh_tok_3' });
+      orderCreate.mockResolvedValue({
+        id: 'ORD12',
+        status: 'processed',
+        transactions: { payments: [{ id: '202' }] },
+      });
+
+      await client.chargeSavedCard({
+        customerId: 'cus_1',
+        cardId: 'card_1',
+        amount: 12000,
+        externalReference: 'flg-user-3-abcd1234',
+        idempotencyKey: 'checkout-flg-user-3-abcd1234',
+        paymentMethodId: 'master',
+        paymentTypeId: 'credit_card',
+      });
+
+      const body = orderCreate.mock.calls[0][0].body as {
+        external_reference?: string;
+      };
+      expect(body.external_reference).toBe('flg-user-3-abcd1234');
     });
 
     it('does not fetch card details for a renewal charge', async () => {
@@ -403,29 +487,49 @@ describe('MercadoPagoClient', () => {
     });
   });
 
-  describe('MercadoPagoClient.getCard', () => {
-    const originalFetch = global.fetch;
+  describe('MercadoPagoClient.saveCard', () => {
+    beforeEach(() => {
+      customerCreateCard = jest.fn<Promise<CardLike>, [unknown]>();
+    });
 
-    afterEach(() => {
-      global.fetch = originalFetch;
+    it("maps the card's payment type from payment_method.payment_type_id", async () => {
+      customerCreateCard.mockResolvedValue({
+        id: 'card_1',
+        last_four_digits: '4242',
+        payment_method: { id: 'visa', payment_type_id: 'credit_card' },
+        expiration_month: 12,
+        expiration_year: 2030,
+      });
+
+      const result = await client.saveCard('cus_1', 'tok_abc');
+
+      expect(result).toEqual({
+        id: 'card_1',
+        lastFourDigits: '4242',
+        paymentMethodId: 'visa',
+        paymentTypeId: 'credit_card',
+        expirationMonth: 12,
+        expirationYear: 2030,
+      });
+    });
+  });
+
+  describe('MercadoPagoClient.getCard', () => {
+    beforeEach(() => {
+      customerListCards = jest.fn<Promise<CardLike[]>, [unknown]>();
     });
 
     it("finds the matching card in the customer's card list", async () => {
-      global.fetch = jest.fn().mockResolvedValue({
-        ok: true,
-        status: 200,
-        json: () =>
-          Promise.resolve([
-            { id: 'card_other', last_four_digits: '1111' },
-            {
-              id: 'card_9',
-              last_four_digits: '4242',
-              payment_method: { id: 'visa' },
-              expiration_month: 12,
-              expiration_year: 2030,
-            },
-          ]),
-      });
+      customerListCards.mockResolvedValue([
+        { id: 'card_other', last_four_digits: '1111' },
+        {
+          id: 'card_9',
+          last_four_digits: '4242',
+          payment_method: { id: 'visa', payment_type_id: 'credit_card' },
+          expiration_month: 12,
+          expiration_year: 2030,
+        },
+      ]);
 
       const result = await client.getCard('cus_1', 'card_9');
 
@@ -433,37 +537,35 @@ describe('MercadoPagoClient', () => {
         id: 'card_9',
         lastFourDigits: '4242',
         paymentMethodId: 'visa',
+        paymentTypeId: 'credit_card',
         expirationMonth: 12,
         expirationYear: 2030,
       });
-      expect(global.fetch).toHaveBeenCalledWith(
-        'https://api.mercadopago.com/v1/customers/cus_1/cards',
-        expect.objectContaining({
-          headers: expect.objectContaining({
-            Authorization: 'Bearer fake-access-token-for-tests',
-          }) as Record<string, string>,
-        }),
-      );
+      expect(customerListCards).toHaveBeenCalledWith({ customerId: 'cus_1' });
     });
 
     it('returns undefined when no card in the list matches', async () => {
-      global.fetch = jest.fn().mockResolvedValue({
-        ok: true,
-        status: 200,
-        json: () => Promise.resolve([{ id: 'card_other' }]),
-      });
+      customerListCards.mockResolvedValue([{ id: 'card_other' }]);
 
       const result = await client.getCard('cus_1', 'card_9');
 
       expect(result).toBeUndefined();
     });
 
-    it('wraps a failed request as MercadoPagoUnavailableError', async () => {
-      global.fetch = jest.fn().mockResolvedValue({
-        ok: false,
-        status: 500,
-        text: () => Promise.resolve('server error'),
-      });
+    it('wraps an SDK failure as MercadoPagoUnavailableError', async () => {
+      customerListCards.mockRejectedValue(new Error('network down'));
+
+      await expect(client.getCard('cus_1', 'card_9')).rejects.toBeInstanceOf(
+        MercadoPagoUnavailableError,
+      );
+    });
+
+    it('wraps a non-array success response as MercadoPagoUnavailableError, not a raw TypeError', async () => {
+      // A malformed 200 response used to crash the raw-fetch implementation
+      // with an unhandled TypeError instead of the coarse error every other
+      // failure produces — the SDK call, inside the same try/catch every
+      // other method uses, no longer has this gap.
+      customerListCards.mockResolvedValue(null as unknown as CardLike[]);
 
       await expect(client.getCard('cus_1', 'card_9')).rejects.toBeInstanceOf(
         MercadoPagoUnavailableError,

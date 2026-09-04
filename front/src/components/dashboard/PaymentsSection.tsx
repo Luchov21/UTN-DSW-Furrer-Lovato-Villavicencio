@@ -237,7 +237,7 @@ const PaymentsSection = () => {
             )}
             <CardForm
               amount={cardFormAmount}
-              onToken={(token) => void handleTokenSaved(token)}
+              onToken={(card) => void handleTokenSaved(card.token)}
               onError={setCardError}
               isBusy={isSavingCard}
             />

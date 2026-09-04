@@ -19,7 +19,11 @@ interface CardFormProps {
    * payment information".
    */
   amount: number;
-  onToken: (token: string) => void;
+  onToken: (payment: {
+    token: string;
+    paymentMethodId: string;
+    paymentTypeId: string;
+  }) => void;
   onError: (message: string) => void;
   isBusy?: boolean;
 }
@@ -34,10 +38,21 @@ const CardForm = ({ amount, onToken, onError, isBusy }: CardFormProps) => {
     );
   }
 
-  // Only `token` is read: the PAN, the CVV and every other field the Brick's
-  // callback returns stay in the browser and never reach our backend.
-  const handleSubmit = async (formData: { token: string }): Promise<void> => {
-    onToken(formData.token);
+  // Only these three fields are read: the PAN, the CVV and every other
+  // field the Brick's callback returns stay in the browser and never reach
+  // our backend. payment_method_id/payment_type_id are not PCI-sensitive —
+  // they're the card's brand and type (e.g. "visa"/"credit_card"), which
+  // Mercado Pago's Orders API needs explicitly to charge the token.
+  const handleSubmit = async (formData: {
+    token: string;
+    payment_method_id: string;
+    payment_type_id: string;
+  }): Promise<void> => {
+    onToken({
+      token: formData.token,
+      paymentMethodId: formData.payment_method_id,
+      paymentTypeId: formData.payment_type_id,
+    });
   };
 
   return (

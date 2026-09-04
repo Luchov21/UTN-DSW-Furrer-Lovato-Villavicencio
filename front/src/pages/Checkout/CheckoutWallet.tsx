@@ -83,7 +83,11 @@ function CheckoutWallet() {
   }, [planId, months, navigate]);
 
   const pay = useCallback(
-    async (cardToken?: string) => {
+    async (card?: {
+      token: string;
+      paymentMethodId: string;
+      paymentTypeId: string;
+    }) => {
       if (!planId) return;
       // Reentrancy guard: the Brick's own submit-button lock releases as
       // soon as onToken (synchronous) returns, well before this async call
@@ -97,9 +101,11 @@ function CheckoutWallet() {
         const response = await submitCheckout({
           planId,
           months,
-          cardToken,
+          cardToken: card?.token,
+          paymentMethodId: card?.paymentMethodId,
+          paymentTypeId: card?.paymentTypeId,
           useSavedCard: useSavedCard || undefined,
-          saveCard: cardToken ? saveCard : undefined,
+          saveCard: card ? saveCard : undefined,
           acceptedTerms: true,
         });
         setResult(response);
@@ -175,7 +181,7 @@ function CheckoutWallet() {
               termsAccepted ? (
                 <CardForm
                   amount={summary.total}
-                  onToken={(token) => void pay(token)}
+                  onToken={(card) => void pay(card)}
                   onError={setError}
                   isBusy={isPaying}
                 />

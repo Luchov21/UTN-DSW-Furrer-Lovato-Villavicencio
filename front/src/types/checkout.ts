@@ -28,6 +28,8 @@ export interface CheckoutPayload {
   planId: number;
   months: number;
   cardToken?: string;
+  paymentMethodId?: string;
+  paymentTypeId?: string;
   useSavedCard?: boolean;
   saveCard?: boolean;
   acceptedTerms: true;

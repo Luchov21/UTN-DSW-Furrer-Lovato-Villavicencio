@@ -1,4 +1,8 @@
-import { ConflictException, ServiceUnavailableException } from '@nestjs/common';
+import {
+  ConflictException,
+  NotFoundException,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { CheckoutService } from './checkout.service';
 import { PlanService } from '../plan/plan.service';
@@ -22,6 +26,7 @@ describe('CheckoutService.pay', () => {
     createCharge: jest.Mock;
     closeAsPaid: jest.Mock;
     closeAsError: jest.Mock;
+    findByExternalReference: jest.Mock;
   };
   let mercadoPago: {
     chargeCardToken: jest.Mock;
@@ -76,6 +81,7 @@ describe('CheckoutService.pay', () => {
         .mockResolvedValue({ id: 7, externalReference: 'flg-user-3-abcd1234' }),
       closeAsPaid: jest.fn().mockResolvedValue(undefined),
       closeAsError: jest.fn().mockResolvedValue(undefined),
+      findByExternalReference: jest.fn(),
     };
     mercadoPago = {
       chargeCardToken: jest.fn().mockResolvedValue({
@@ -470,6 +476,78 @@ describe('CheckoutService.pay', () => {
           months: 1,
         }),
       ).rejects.toBeInstanceOf(ServiceUnavailableException);
+    });
+  });
+
+  describe('CheckoutService.armOrder', () => {
+    const dto = {
+      planId: 12,
+      months: 1,
+      externalReference: 'flg-user-7-a1b2c3d4',
+    };
+
+    it('creates an online order carrying the supplied reference', async () => {
+      chargeOrders.findByExternalReference.mockResolvedValue(null);
+
+      await service.armOrder(7, dto);
+
+      expect(chargeOrders.createCharge).toHaveBeenCalledWith({
+        userId: 7,
+        planId: 12,
+        months: 1,
+        amount: 19995,
+        method: 'online',
+        collectionPointId: null,
+        adminId: null,
+        externalReference: 'flg-user-7-a1b2c3d4',
+      });
+    });
+
+    it('re-prices server-side rather than trusting anything sent', async () => {
+      chargeOrders.findByExternalReference.mockResolvedValue(null);
+
+      await service.armOrder(7, { ...dto, amount: 1 } as never);
+
+      expect(chargeOrders.createCharge).toHaveBeenCalledWith(
+        expect.objectContaining({ amount: 19995 }),
+      );
+    });
+
+    it('is a no-op when this member already armed that reference', async () => {
+      chargeOrders.findByExternalReference.mockResolvedValue({
+        userId: 7,
+        status: 'pendiente',
+        externalReference: dto.externalReference,
+      });
+
+      await service.armOrder(7, dto);
+
+      expect(chargeOrders.createCharge).not.toHaveBeenCalled();
+    });
+
+    it('refuses a reference belonging to another member', async () => {
+      chargeOrders.findByExternalReference.mockResolvedValue({
+        userId: 99,
+        status: 'pendiente',
+        externalReference: dto.externalReference,
+      });
+
+      await expect(service.armOrder(7, dto)).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+      expect(chargeOrders.createCharge).not.toHaveBeenCalled();
+    });
+
+    it('refuses to re-arm a reference that already settled', async () => {
+      chargeOrders.findByExternalReference.mockResolvedValue({
+        userId: 7,
+        status: 'pagada',
+        externalReference: dto.externalReference,
+      });
+
+      await expect(service.armOrder(7, dto)).rejects.toBeInstanceOf(
+        ConflictException,
+      );
     });
   });
 });

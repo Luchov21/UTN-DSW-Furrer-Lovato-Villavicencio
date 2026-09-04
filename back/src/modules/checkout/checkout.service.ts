@@ -10,6 +10,7 @@ import { PlanService } from '../plan/plan.service';
 import { PlanDurationService } from '../plan/plan-duration.service';
 import { ChargeOrderService } from '../chargeOrder/chargeOrder.service';
 import { buildExternalReference } from '../chargeOrder/chargeOrder.rules';
+import { ChargeOrderStatus } from '../chargeOrder/enum/chargeOrder-status.enum';
 import type { MpPaymentResult } from '../mercadopago/mercadopago.client';
 import {
   MercadoPagoClient,
@@ -23,6 +24,7 @@ import { subscriptionService } from '../subscription/subscription.service';
 import { MailService } from '../../common/mail/mail.service';
 import type { CheckoutDto } from './dto/checkout-dto';
 import type { CheckoutPreferenceDto } from './dto/checkout-preference-dto';
+import type { CheckoutArmDto } from './dto/checkout-arm-dto';
 import {
   buildSummary,
   type CheckoutResult,
@@ -105,6 +107,53 @@ export class CheckoutService {
       }
       throw error;
     }
+  }
+
+  /**
+   * Arms the ChargeOrder a wallet payment will settle against, called from
+   * the Payment Brick's onSubmit immediately before it redirects the member
+   * to Mercado Pago. Rejecting here cancels that redirect, which is the point:
+   * a redirect that outran its own bookkeeping means Mercado Pago charging
+   * against a reference nothing resolves.
+   *
+   * Idempotent on (member, reference) so a retried submit re-uses the row
+   * rather than colliding with the column's unique constraint.
+   */
+  async armOrder(userId: number, dto: CheckoutArmDto): Promise<void> {
+    const existing = await this.chargeOrderService.findByExternalReference(
+      dto.externalReference,
+    );
+
+    if (existing) {
+      // 404, not 403: a different member's reference must not be confirmed to
+      // exist. Same reasoning as getStatus.
+      if (existing.userId !== userId) {
+        throw new NotFoundException('La orden de pago no existe.');
+      }
+      const pending: string = ChargeOrderStatus.PENDING;
+      if (existing.status !== pending) {
+        throw new ConflictException(
+          'Esta orden de pago ya se cerró. Volvé a empezar el pago.',
+        );
+      }
+      return;
+    }
+
+    // Re-priced here, never taken from the request: the browser has been away
+    // to a preference and back, and D5 does not stop applying because a
+    // previous endpoint already computed a price.
+    const summary = await this.getSummary(dto.planId, dto.months);
+
+    await this.chargeOrderService.createCharge({
+      userId,
+      planId: dto.planId,
+      months: dto.months,
+      amount: summary.total,
+      method: 'online',
+      collectionPointId: null,
+      adminId: null,
+      externalReference: dto.externalReference,
+    });
   }
 
   /**

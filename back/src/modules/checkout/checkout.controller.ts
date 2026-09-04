@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Post, Query } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { SkipThrottle } from '@nestjs/throttler';
 import { SKIP_ALL_THROTTLERS } from '../../auth/auth.throttle';
@@ -10,6 +10,7 @@ import { CheckoutService } from './checkout.service';
 import { CheckoutSummaryQueryDto } from './dto/checkout-summary-query-dto';
 import { CheckoutDto } from './dto/checkout-dto';
 import { CheckoutPreferenceDto } from './dto/checkout-preference-dto';
+import { CheckoutArmDto } from './dto/checkout-arm-dto';
 
 @Controller('api/v1/checkout')
 @ApiTags('Checkout')
@@ -44,5 +45,14 @@ export class CheckoutController {
     @Body() dto: CheckoutPreferenceDto,
   ) {
     return this.checkoutService.createPreference(user.sub, user.email, dto);
+  }
+
+  // Arms the charge order a wallet payment settles against. Called from the
+  // Brick's onSubmit; a non-2xx here cancels the redirect on purpose.
+  @Post('arm')
+  @Auth(Role.USER)
+  @HttpCode(204)
+  arm(@ActiveUser() user: UserActiveInterface, @Body() dto: CheckoutArmDto) {
+    return this.checkoutService.armOrder(user.sub, dto);
   }
 }

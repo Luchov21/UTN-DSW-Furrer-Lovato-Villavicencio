@@ -9,6 +9,7 @@ import { Role } from '../../common/enum/role.enum';
 import { CheckoutService } from './checkout.service';
 import { CheckoutSummaryQueryDto } from './dto/checkout-summary-query-dto';
 import { CheckoutDto } from './dto/checkout-dto';
+import { CheckoutPreferenceDto } from './dto/checkout-preference-dto';
 
 @Controller('api/v1/checkout')
 @ApiTags('Checkout')
@@ -32,5 +33,16 @@ export class CheckoutController {
   @Auth(Role.USER)
   pay(@ActiveUser() user: UserActiveInterface, @Body() dto: CheckoutDto) {
     return this.checkoutService.pay(user.sub, user.email, dto);
+  }
+
+  // Creates the Mercado Pago preference the Payment Brick's wallet option
+  // needs at mount time. Writes no charge order — see CheckoutService.
+  @Post('preference')
+  @Auth(Role.USER)
+  createPreference(
+    @ActiveUser() user: UserActiveInterface,
+    @Body() dto: CheckoutPreferenceDto,
+  ) {
+    return this.checkoutService.createPreference(user.sub, user.email, dto);
   }
 }

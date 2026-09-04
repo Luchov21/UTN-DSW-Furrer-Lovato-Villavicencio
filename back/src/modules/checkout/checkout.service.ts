@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import {
   ConflictException,
   Injectable,
@@ -8,17 +9,20 @@ import {
 import { PlanService } from '../plan/plan.service';
 import { PlanDurationService } from '../plan/plan-duration.service';
 import { ChargeOrderService } from '../chargeOrder/chargeOrder.service';
+import { buildExternalReference } from '../chargeOrder/chargeOrder.rules';
 import type { MpPaymentResult } from '../mercadopago/mercadopago.client';
 import {
   MercadoPagoClient,
   MercadoPagoUnavailableError,
 } from '../mercadopago/mercadopago.client';
+import { MercadoPagoConfig } from '../mercadopago/mercadopago.config';
 import { PaymentService } from '../payment/payment.service';
 import { SavedCardService } from '../savedCard/savedCard.service';
 import { isChargeable } from '../savedCard/savedCard.rules';
 import { subscriptionService } from '../subscription/subscription.service';
 import { MailService } from '../../common/mail/mail.service';
 import type { CheckoutDto } from './dto/checkout-dto';
+import type { CheckoutPreferenceDto } from './dto/checkout-preference-dto';
 import {
   buildSummary,
   type CheckoutResult,
@@ -34,6 +38,7 @@ export class CheckoutService {
     private readonly planDurationService: PlanDurationService,
     private readonly chargeOrderService: ChargeOrderService,
     private readonly mercadoPagoClient: MercadoPagoClient,
+    private readonly mercadoPagoConfig: MercadoPagoConfig,
     private readonly paymentService: PaymentService,
     private readonly savedCardService: SavedCardService,
     private readonly subscriptionService: subscriptionService,
@@ -49,6 +54,57 @@ export class CheckoutService {
 
     const durations = await this.planDurationService.findByPlan(planId);
     return buildSummary(plan, months, durations);
+  }
+
+  /**
+   * The Mercado Pago preference behind the Payment Brick's wallet option.
+   *
+   * Creates NO ChargeOrder: this runs on every wallet-page load and on every
+   * duration change, and arming here would leave a PENDING row behind for
+   * every member who browsed and left — rows nothing sweeps, since
+   * expireStale() excludes 'online' by design. The row is written by
+   * armOrder(), at submit time. See the spec's D4.
+   */
+  async createPreference(
+    userId: number,
+    email: string,
+    dto: CheckoutPreferenceDto,
+  ): Promise<{
+    preferenceId: string;
+    externalReference: string;
+    amount: number;
+  }> {
+    const summary = await this.getSummary(dto.planId, dto.months);
+    const externalReference = buildExternalReference(
+      userId,
+      randomUUID().slice(0, 8),
+    );
+
+    try {
+      const preference = await this.mercadoPagoClient.createPreference({
+        planName: summary.planName,
+        amount: summary.total,
+        externalReference,
+        payerEmail: email,
+        frontendUrl: this.mercadoPagoConfig.frontendUrl,
+        now: new Date(),
+      });
+
+      return {
+        preferenceId: preference.id,
+        externalReference,
+        amount: summary.total,
+      };
+    } catch (error) {
+      if (error instanceof MercadoPagoUnavailableError) {
+        // Nothing was armed and nothing was charged, so this is safe to
+        // report as a plain outage. The wallet page degrades to cards only.
+        throw new ServiceUnavailableException(
+          'No pudimos preparar el pago con Mercado Pago. Podés pagar con tarjeta.',
+        );
+      }
+      throw error;
+    }
   }
 
   /**

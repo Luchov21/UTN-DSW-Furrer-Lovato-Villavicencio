@@ -8,6 +8,7 @@ import {
   MercadoPagoClient,
   MercadoPagoUnavailableError,
 } from '../mercadopago/mercadopago.client';
+import { MercadoPagoConfig } from '../mercadopago/mercadopago.config';
 import { PaymentService } from '../payment/payment.service';
 import { SavedCardService } from '../savedCard/savedCard.service';
 import { subscriptionService } from '../subscription/subscription.service';
@@ -26,6 +27,7 @@ describe('CheckoutService.pay', () => {
     chargeCardToken: jest.Mock;
     chargeSavedCard: jest.Mock;
     findOrCreateCustomer: jest.Mock;
+    createPreference: jest.Mock;
   };
   let payments: { confirmPlanCharge: jest.Mock };
   let savedCards: {
@@ -83,6 +85,7 @@ describe('CheckoutService.pay', () => {
       }),
       chargeSavedCard: jest.fn(),
       findOrCreateCustomer: jest.fn().mockResolvedValue({ id: 'cus_1' }),
+      createPreference: jest.fn(),
     };
     payments = {
       confirmPlanCharge: jest.fn().mockResolvedValue({
@@ -110,6 +113,10 @@ describe('CheckoutService.pay', () => {
         { provide: PlanDurationService, useValue: planDurations },
         { provide: ChargeOrderService, useValue: chargeOrders },
         { provide: MercadoPagoClient, useValue: mercadoPago },
+        {
+          provide: MercadoPagoConfig,
+          useValue: { frontendUrl: 'https://flg.example.com' },
+        },
         { provide: PaymentService, useValue: payments },
         { provide: SavedCardService, useValue: savedCards },
         { provide: subscriptionService, useValue: subscriptions },
@@ -417,5 +424,52 @@ describe('CheckoutService.pay', () => {
       'cus_1',
       expect.objectContaining({ paymentTypeId: 'credit_card' }),
     );
+  });
+
+  describe('CheckoutService.createPreference', () => {
+    it('prices from the plan and never writes a charge order', async () => {
+      mercadoPago.createPreference.mockResolvedValue({ id: 'pref-123' });
+
+      const result = await service.createPreference(7, 'socio@example.com', {
+        planId: 12,
+        months: 1,
+      });
+
+      expect(result.preferenceId).toBe('pref-123');
+      expect(result.amount).toBe(19995);
+      expect(result.externalReference).toMatch(/^flg-user-7-[a-f0-9]{8}$/);
+      expect(chargeOrders.createCharge).not.toHaveBeenCalled();
+    });
+
+    it('passes the server-resolved amount and the member email to Mercado Pago', async () => {
+      mercadoPago.createPreference.mockResolvedValue({ id: 'pref-123' });
+
+      await service.createPreference(7, 'socio@example.com', {
+        planId: 12,
+        months: 1,
+      });
+
+      expect(mercadoPago.createPreference).toHaveBeenCalledWith(
+        expect.objectContaining({
+          amount: 19995,
+          payerEmail: 'socio@example.com',
+          planName: 'Plan Full',
+          frontendUrl: 'https://flg.example.com',
+        }),
+      );
+    });
+
+    it('surfaces an outage as ServiceUnavailableException', async () => {
+      mercadoPago.createPreference.mockRejectedValue(
+        new MercadoPagoUnavailableError('down'),
+      );
+
+      await expect(
+        service.createPreference(7, 'socio@example.com', {
+          planId: 12,
+          months: 1,
+        }),
+      ).rejects.toBeInstanceOf(ServiceUnavailableException);
+    });
   });
 });

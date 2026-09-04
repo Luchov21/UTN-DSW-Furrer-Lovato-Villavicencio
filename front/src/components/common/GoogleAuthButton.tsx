@@ -20,6 +20,11 @@ interface GoogleAuthButtonProps {
   disabled?: boolean;
   onSuccess?: () => void;
   onError?: (error: string) => void;
+  // An embedding flow (checkout) takes over the incomplete-profile redirect
+  // so the purchase is not lost. Without it this component navigates to
+  // /complete-profile with no returnTo, and the plan and term in the URL go
+  // with it. Callers that don't pass it keep the existing behavior.
+  onIncompleteProfile?: () => void;
 }
 
 const GoogleAuthButton = ({
@@ -27,6 +32,7 @@ const GoogleAuthButton = ({
   disabled = false,
   onSuccess,
   onError,
+  onIncompleteProfile,
 }: GoogleAuthButtonProps) => {
   const navigate = useNavigate();
   const { loginWithGoogle } = useAuth();
@@ -140,7 +146,11 @@ const GoogleAuthButton = ({
       // A brand-new Google account has no dni and no phone. Going home first
       // and bouncing off ProtectedRoute would flash a page they cannot use.
       if (!data.user.profileComplete) {
-        navigate('/complete-profile', { replace: true });
+        if (onIncompleteProfile) {
+          onIncompleteProfile();
+        } else {
+          navigate('/complete-profile', { replace: true });
+        }
       } else if (onSuccess) {
         onSuccess();
       } else {

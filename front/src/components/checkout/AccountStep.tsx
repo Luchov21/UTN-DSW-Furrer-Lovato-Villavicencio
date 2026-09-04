@@ -6,12 +6,16 @@ import LoginForm from '../login/LoginForm';
 
 interface AccountStepProps {
   onAuthenticated: () => void;
+  onIncompleteProfile: () => void;
 }
 
 // A guest picking a plan should not be bounced to /login and lose the plan
 // they picked: both forms live here, inside the checkout, with the summary
 // still on screen.
-const AccountStep = ({ onAuthenticated }: AccountStepProps) => {
+const AccountStep = ({
+  onAuthenticated,
+  onIncompleteProfile,
+}: AccountStepProps) => {
   const [mode, setMode] = useState<'register' | 'login'>('register');
 
   return (
@@ -27,9 +31,15 @@ const AccountStep = ({ onAuthenticated }: AccountStepProps) => {
 
       <div className="mt-5">
         {mode === 'register' ? (
-          <RegisterForm onSuccess={onAuthenticated} />
+          <RegisterForm
+            onSuccess={onAuthenticated}
+            onIncompleteProfile={onIncompleteProfile}
+          />
         ) : (
-          <LoginForm onSuccess={onAuthenticated} />
+          <LoginForm
+            onSuccess={onAuthenticated}
+            onIncompleteProfile={onIncompleteProfile}
+          />
         )}
       </div>
 
@@ -39,7 +49,9 @@ const AccountStep = ({ onAuthenticated }: AccountStepProps) => {
         className="mt-4"
         onClick={() => setMode(mode === 'register' ? 'login' : 'register')}
       >
-        {mode === 'register' ? '¿Ya tenés cuenta? Iniciá sesión' : 'Crear una cuenta nueva'}
+        {mode === 'register'
+          ? '¿Ya tenés cuenta? Iniciá sesión'
+          : 'Crear una cuenta nueva'}
       </Button>
     </Card>
   );

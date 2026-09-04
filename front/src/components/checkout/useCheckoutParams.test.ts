@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { readCheckoutParams, safeReturnTo } from './useCheckoutParams';
+import {
+  checkoutWalletUrl,
+  readCheckoutParams,
+  safeReturnTo,
+} from './useCheckoutParams';
 
 describe('readCheckoutParams', () => {
   it('reads a plan and a term', () => {
@@ -39,5 +43,15 @@ describe('safeReturnTo', () => {
 
   it('falls back when there is nothing', () => {
     expect(safeReturnTo(null)).toBe('/dashboard');
+  });
+});
+
+describe('checkoutWalletUrl', () => {
+  it('carries the plan and the term', () => {
+    expect(checkoutWalletUrl(12, 6)).toBe('/checkout/wallet?plan=12&months=6');
+  });
+
+  it('renders a missing plan as an empty parameter rather than "null"', () => {
+    expect(checkoutWalletUrl(null, 1)).toBe('/checkout/wallet?plan=&months=1');
   });
 });

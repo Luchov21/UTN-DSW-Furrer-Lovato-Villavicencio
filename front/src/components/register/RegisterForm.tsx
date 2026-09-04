@@ -13,9 +13,15 @@ interface RegisterFormProps {
   // instead of the default redirect home. Callers that don't pass it keep
   // the existing behavior unchanged.
   onSuccess?: () => void;
+  // Forwarded to GoogleAuthButton. Callers that don't pass it keep the
+  // existing behavior unchanged.
+  onIncompleteProfile?: () => void;
 }
 
-const RegisterForm = ({ onSuccess }: RegisterFormProps) => {
+const RegisterForm = ({
+  onSuccess,
+  onIncompleteProfile,
+}: RegisterFormProps) => {
   const navigate = useNavigate();
   const { register } = useAuth();
   const [dni, setDni] = useState('');
@@ -257,6 +263,7 @@ const RegisterForm = ({ onSuccess }: RegisterFormProps) => {
         label="Registrarse con Google"
         disabled={isLoading}
         onError={(errMsg) => setError(errMsg)}
+        onIncompleteProfile={onIncompleteProfile}
       />
 
       <p className="text-center font-body text-sm text-text-muted pt-1">

@@ -17,9 +17,12 @@ interface LoginFormProps {
   // instead of the default redirect. Callers that don't pass it keep the
   // existing behavior unchanged.
   onSuccess?: () => void;
+  // Forwarded to GoogleAuthButton. Callers that don't pass it keep the
+  // existing behavior unchanged.
+  onIncompleteProfile?: () => void;
 }
 
-const LoginForm = ({ onSuccess }: LoginFormProps) => {
+const LoginForm = ({ onSuccess, onIncompleteProfile }: LoginFormProps) => {
   const navigate = useNavigate();
   const location = useLocation();
   const { login } = useAuth();
@@ -186,6 +189,7 @@ const LoginForm = ({ onSuccess }: LoginFormProps) => {
         label="Continuar con Google"
         disabled={isLoading}
         onError={(errMsg) => setError(errMsg)}
+        onIncompleteProfile={onIncompleteProfile}
       />
 
       <p className="text-center font-body text-sm text-text-muted pt-2">

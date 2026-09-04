@@ -31,3 +31,16 @@ export function safeReturnTo(value: string | null): string {
   }
   return value;
 }
+
+/**
+ * The wallet step's URL for a given purchase. One helper because three
+ * callers build it — Checkout's redirect, AccountStep's returnTo, and the
+ * wallet page's own duration switch — and a divergence between them silently
+ * drops the plan.
+ */
+export function checkoutWalletUrl(
+  planId: number | null,
+  months: number,
+): string {
+  return `/checkout/wallet?plan=${planId ?? ''}&months=${months}`;
+}

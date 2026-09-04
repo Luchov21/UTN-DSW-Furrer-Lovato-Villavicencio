@@ -211,6 +211,42 @@ describe('RefundService', () => {
       expect(mercadoPagoClient.refundPayment).not.toHaveBeenCalled();
     });
 
+    it('refunds a Point/QR-originated payment through the Orders API, not the classic endpoint', async () => {
+      // webhook.service.ts sets mpOrderId on EVERY order-topic notification
+      // going forward, including the Point/QR ingestion path — so a Point/QR
+      // payment recorded through this migration carries an mpOrderId exactly
+      // like an online checkout payment does, and must route through
+      // refundOrder for the same reason: the classic refundPayment endpoint
+      // rejects an Orders API transaction id. This is a deliberate behavior
+      // change beyond this migration's originally stated Point/QR scope (see
+      // the comment above the branch in refund.service.ts), covered here so
+      // it isn't silently untested.
+      subscriptionService.findSubscription.mockResolvedValue(
+        buildSubscription(),
+      );
+      paymentService.findCurrentTermPayment.mockResolvedValue(
+        buildPayment({
+          payMethod: 'point',
+          mpPaymentId: 'PAY-POINT-01',
+          mpOrderId: 'ORD-POINT-01',
+        }),
+      );
+      mercadoPagoClient.refundOrder = jest
+        .fn()
+        .mockResolvedValue({ id: 'ORD-POINT-01', status: 'processed' });
+
+      const result = await service.issue(7, 900);
+
+      expect(mercadoPagoClient.refundOrder).toHaveBeenCalledWith(
+        'ORD-POINT-01',
+        'PAY-POINT-01',
+        70000,
+        'refund-55',
+      );
+      expect(mercadoPagoClient.refundPayment).not.toHaveBeenCalled();
+      expect(result.state).toBe(PaymentState.REFUNDED);
+    });
+
     it('makes no MP call for a cash payment', async () => {
       subscriptionService.findSubscription.mockResolvedValue(
         buildSubscription(),

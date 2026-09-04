@@ -78,9 +78,20 @@ export class RefundService {
       // POST /v1/orders/{order_id}/refund, keyed on the order id with the
       // transaction id in the body — the classic
       // POST /v1/payments/{id}/refunds refundPayment uses rejects an Orders
-      // API transaction id. A payment with no mpOrderId (Point/QR, or a
-      // payment predating this migration) keeps using refundPayment exactly
-      // as before.
+      // API transaction id. A payment with no mpOrderId (recorded before this
+      // migration, or through a path that never set it) keeps using
+      // refundPayment exactly as before.
+      //
+      // Every payment recorded going forward through this migration's
+      // checkout/renewal/webhook paths carries an mpOrderId, including
+      // Point/QR: webhook.service.ts now sets `mpOrderId: order.id` on EVERY
+      // order-topic notification, which is exactly how Point/QR payments get
+      // ingested. That silently routes future Point/QR refunds through
+      // refundOrder instead of refundPayment — a behavior change beyond this
+      // migration's original stated scope (Point/QR refund handling was
+      // called out as out of scope), but very likely a beneficial one:
+      // refundPayment's classic endpoint never worked correctly for an
+      // Orders-API-originated payment in the first place, Point/QR included.
       if (payment.mpOrderId) {
         await this.mercadoPagoClient.refundOrder(
           payment.mpOrderId,

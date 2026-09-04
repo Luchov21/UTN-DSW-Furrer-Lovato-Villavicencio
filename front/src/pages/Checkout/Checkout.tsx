@@ -62,18 +62,11 @@ function Checkout() {
     navigate(walletUrl, { replace: true });
   }, [isAuthenticated, isProfileComplete, navigate, walletUrl]);
 
-  const handleMonthsChange = (nextMonths: number) => {
-    navigate(`/checkout?plan=${planId ?? ''}&months=${nextMonths}`, {
-      replace: true,
-    });
-  };
-
   return (
     <CheckoutLayout
       title="Finalizá tu membresía"
       subtitle="Creá tu cuenta para continuar con el pago. Te lleva menos de un minuto."
       summary={summary}
-      onMonthsChange={handleMonthsChange}
     >
       <FormAlert type="error" message={error} />
       {isLoading ? (

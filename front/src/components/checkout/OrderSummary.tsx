@@ -1,19 +1,19 @@
 import { Lock, RotateCcw, ShieldCheck } from 'lucide-react';
-import DurationSelector from './DurationSelector';
 import { formatPriceDisplay } from '../../lib/currency';
 import type { CheckoutSummary } from '../../types/checkout';
 
 interface OrderSummaryProps {
   summary: CheckoutSummary;
-  onMonthsChange?: (months: number) => void;
-  isBusy?: boolean;
 }
 
 // Every claim here is one the architecture actually earns: the Brick
 // tokenizes in the browser, so no card data reaches our servers. If that ever
 // stops being true, this copy has to change with it.
 const TRUST_SIGNALS = [
-  { Icon: ShieldCheck, text: 'Pago procesado de forma segura por Mercado Pago' },
+  {
+    Icon: ShieldCheck,
+    text: 'Pago procesado de forma segura por Mercado Pago',
+  },
   {
     Icon: Lock,
     text: 'Tus datos de tarjeta viajan cifrados y no se guardan en nuestros servidores',
@@ -21,11 +21,7 @@ const TRUST_SIGNALS = [
   { Icon: RotateCcw, text: 'Cancelá o pausá cuando quieras desde tu panel' },
 ];
 
-const OrderSummary = ({
-  summary,
-  onMonthsChange,
-  isBusy,
-}: OrderSummaryProps) => (
+const OrderSummary = ({ summary }: OrderSummaryProps) => (
   <aside className="rounded-2xl border border-border bg-surface p-6 lg:sticky lg:top-24">
     <h2 className="font-display text-lg font-semibold text-text">Tu compra</h2>
 
@@ -36,20 +32,11 @@ const OrderSummary = ({
       </span>
     </div>
 
-    {onMonthsChange && (
-      <div className="mt-5">
-        <DurationSelector
-          summary={summary}
-          onChange={onMonthsChange}
-          disabled={isBusy}
-        />
-      </div>
-    )}
-
     <dl className="mt-5 space-y-2 border-t border-border pt-4 text-sm">
       <div className="flex justify-between gap-4">
         <dt className="text-text-muted">
-          Subtotal ({summary.months} × ${formatPriceDisplay(summary.monthlyPrice)})
+          Subtotal ({summary.months} × $
+          {formatPriceDisplay(summary.monthlyPrice)})
         </dt>
         <dd className="text-text">${formatPriceDisplay(summary.subtotal)}</dd>
       </div>

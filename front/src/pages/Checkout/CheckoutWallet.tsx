@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { Loader2 } from 'lucide-react';
 import CheckoutLayout from '../../components/checkout/CheckoutLayout';
 import CardForm from '../../components/checkout/CardForm';
+import DurationSelector from '../../components/checkout/DurationSelector';
 import PaymentMethodChoice from '../../components/checkout/PaymentMethodChoice';
 import TermsAcceptance from '../../components/checkout/TermsAcceptance';
 import PaymentSuccess from '../../components/checkout/PaymentSuccess';
@@ -10,7 +11,10 @@ import DeclineBanner from '../../components/checkout/DeclineBanner';
 import Card from '../../components/common/Card';
 import Button from '../../components/common/Button';
 import FormAlert from '../../components/common/FormAlert';
-import { readCheckoutParams } from '../../components/checkout/useCheckoutParams';
+import {
+  checkoutWalletUrl,
+  readCheckoutParams,
+} from '../../components/checkout/useCheckoutParams';
 import {
   getCheckoutSummary,
   submitCheckout,
@@ -74,8 +78,7 @@ function CheckoutWallet() {
             cardRes.reason,
           );
         }
-        const savedCard =
-          cardRes.status === 'fulfilled' ? cardRes.value : null;
+        const savedCard = cardRes.status === 'fulfilled' ? cardRes.value : null;
         setCard(savedCard);
         setUseSavedCard(Boolean(savedCard));
       })
@@ -138,6 +141,13 @@ function CheckoutWallet() {
     if (field === 'saveCard') setSaveCard(value);
   };
 
+  // Changing the term re-prices the purchase, so it navigates rather than
+  // setting state: the plan and term live in the query string (see
+  // useCheckoutParams), and the load effect below re-runs off them.
+  const handleMonthsChange = (nextMonths: number) => {
+    navigate(checkoutWalletUrl(planId, nextMonths), { replace: true });
+  };
+
   if (result?.status === 'approved') {
     return (
       <CheckoutLayout
@@ -155,7 +165,6 @@ function CheckoutWallet() {
       title="Pagá tu membresía"
       subtitle="Ingresá los datos de tu tarjeta. El cobro se procesa a través de Mercado Pago."
       summary={summary}
-      isBusy={isPaying}
     >
       {isLoading ? (
         <div className="flex h-48 items-center justify-center">
@@ -164,6 +173,14 @@ function CheckoutWallet() {
       ) : (
         <Card className="hover:translate-y-0 hover:shadow-lg">
           <div className="space-y-5">
+            {summary && (
+              <DurationSelector
+                summary={summary}
+                onChange={handleMonthsChange}
+                disabled={isPaying}
+              />
+            )}
+
             <FormAlert type="error" message={error} />
 
             {/* The 'approved' case already returned above, so anything
@@ -177,8 +194,9 @@ function CheckoutWallet() {
               disabled={isPaying}
             />
 
-            {!useSavedCard && summary && (
-              termsAccepted ? (
+            {!useSavedCard &&
+              summary &&
+              (termsAccepted ? (
                 <CardForm
                   amount={summary.total}
                   onToken={(card) => void pay(card)}
@@ -190,8 +208,7 @@ function CheckoutWallet() {
                   Aceptá los Términos y Condiciones y el Reglamento de Uso para
                   ingresar los datos de tu tarjeta.
                 </div>
-              )
-            )}
+              ))}
 
             <TermsAcceptance
               acceptedTerms={acceptedTerms}

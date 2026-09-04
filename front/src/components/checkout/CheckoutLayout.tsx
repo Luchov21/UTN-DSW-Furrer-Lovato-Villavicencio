@@ -9,8 +9,6 @@ interface CheckoutLayoutProps {
   title: string;
   subtitle: string;
   summary: CheckoutSummary | null;
-  onMonthsChange?: (months: number) => void;
-  isBusy?: boolean;
   children: ReactNode;
 }
 
@@ -21,8 +19,6 @@ const CheckoutLayout = ({
   title,
   subtitle,
   summary,
-  onMonthsChange,
-  isBusy,
   children,
 }: CheckoutLayoutProps) => (
   <div className="flex min-h-screen flex-col bg-background text-text">
@@ -37,13 +33,7 @@ const CheckoutLayout = ({
         <div className="mt-8 grid gap-8 lg:grid-cols-[1fr_360px]">
           <div className="order-2 lg:order-1">{children}</div>
           <div className="order-1 lg:order-2">
-            {summary && (
-              <OrderSummary
-                summary={summary}
-                onMonthsChange={onMonthsChange}
-                isBusy={isBusy}
-              />
-            )}
+            {summary && <OrderSummary summary={summary} />}
           </div>
         </div>
       </Container>

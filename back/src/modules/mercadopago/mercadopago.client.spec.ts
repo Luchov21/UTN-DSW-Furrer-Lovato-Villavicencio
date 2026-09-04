@@ -236,4 +236,72 @@ describe('MercadoPagoClient', () => {
       expect(result.card).toBeUndefined();
     });
   });
+
+  describe('MercadoPagoClient.getCard', () => {
+    const originalFetch = global.fetch;
+
+    afterEach(() => {
+      global.fetch = originalFetch;
+    });
+
+    it("finds the matching card in the customer's card list", async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: () =>
+          Promise.resolve([
+            { id: 'card_other', last_four_digits: '1111' },
+            {
+              id: 'card_9',
+              last_four_digits: '4242',
+              payment_method: { id: 'visa' },
+              expiration_month: 12,
+              expiration_year: 2030,
+            },
+          ]),
+      });
+
+      const result = await client.getCard('cus_1', 'card_9');
+
+      expect(result).toEqual({
+        id: 'card_9',
+        lastFourDigits: '4242',
+        paymentMethodId: 'visa',
+        expirationMonth: 12,
+        expirationYear: 2030,
+      });
+      expect(global.fetch).toHaveBeenCalledWith(
+        'https://api.mercadopago.com/v1/customers/cus_1/cards',
+        expect.objectContaining({
+          headers: expect.objectContaining({
+            Authorization: 'Bearer fake-access-token-for-tests',
+          }) as Record<string, string>,
+        }),
+      );
+    });
+
+    it('returns undefined when no card in the list matches', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve([{ id: 'card_other' }]),
+      });
+
+      const result = await client.getCard('cus_1', 'card_9');
+
+      expect(result).toBeUndefined();
+    });
+
+    it('wraps a failed request as MercadoPagoUnavailableError', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 500,
+        text: () => Promise.resolve('server error'),
+      });
+
+      await expect(client.getCard('cus_1', 'card_9')).rejects.toBeInstanceOf(
+        MercadoPagoUnavailableError,
+      );
+    });
+  });
 });

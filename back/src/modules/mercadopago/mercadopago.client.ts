@@ -90,6 +90,15 @@ export interface MpSavedCard {
   expirationYear?: number;
 }
 
+/** Shape of one entry in `GET /v1/customers/{customer_id}/cards`'s raw response. */
+interface RawCard {
+  id?: string;
+  last_four_digits?: string;
+  payment_method?: { id?: string };
+  expiration_month?: number;
+  expiration_year?: number;
+}
+
 export interface ChargeSavedCardInput {
   customerId: string;
   cardId: string;
@@ -414,6 +423,59 @@ export class MercadoPagoClient {
     } catch (err) {
       throw this.wrapError('deleteCard', err);
     }
+  }
+
+  /**
+   * Looks up one card in a customer's saved-card list by id. Used only after
+   * an online-order charge that attaches a NEW card to a customer: the order
+   * response echoes the new card's id (`payment_method.card_id`) but not its
+   * last-four-digits/expiration, so this fills in the rest — one call, only
+   * on the save-card path, never in the common (no-save) charge path.
+   *
+   * Not covered by the `mercadopago` SDK (no list-cards client exists) — a
+   * raw fetch, same pattern as `MercadoPagoTerminalPrinterClient` uses for
+   * its own SDK-uncovered endpoint.
+   */
+  async getCard(
+    customerId: string,
+    cardId: string,
+  ): Promise<MpSavedCard | undefined> {
+    // Reuses the same enabled/configured guard every other method gets from
+    // getSdkConfig(), even though this call doesn't use the SDK client.
+    this.getSdkConfig();
+    const accessToken = this.config.accessToken as string;
+
+    let response: Response;
+    try {
+      response = await fetch(
+        `https://api.mercadopago.com/v1/customers/${customerId}/cards`,
+        { headers: { Authorization: `Bearer ${accessToken}` } },
+      );
+    } catch (err) {
+      throw this.wrapError('getCard', err);
+    }
+
+    if (!response.ok) {
+      const text = await response.text().catch(() => '');
+      throw this.wrapError('getCard', {
+        status: response.status,
+        causes: [text],
+      });
+    }
+
+    const cards = (await response.json()) as RawCard[];
+    const card = cards.find((c) => c.id === cardId);
+    if (!card) {
+      return undefined;
+    }
+
+    return {
+      id: card.id as string,
+      lastFourDigits: card.last_four_digits,
+      paymentMethodId: card.payment_method?.id,
+      expirationMonth: card.expiration_month,
+      expirationYear: card.expiration_year,
+    };
   }
 
   /**

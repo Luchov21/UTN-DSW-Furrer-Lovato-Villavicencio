@@ -116,6 +116,10 @@ export interface ChargeCardTokenInput {
   /** Maps the payment back to its ChargeOrder if the local write fails. */
   externalReference: string;
   idempotencyKey: string;
+  /** Card brand, e.g. `visa` — from the Card Payment Brick's onSubmit. */
+  paymentMethodId: string;
+  /** `credit_card` or `debit_card` — from the Card Payment Brick's onSubmit. */
+  paymentTypeId: string;
   /**
    * Present only when the member asked to save the card: scoping the payment
    * to a Mercado Pago customer is what attaches the card to it, since the
@@ -479,6 +483,97 @@ export class MercadoPagoClient {
   }
 
   /**
+   * Builds and charges a `type: "online"` Orders API order — the shared
+   * implementation behind both `chargeCardToken` (a fresh single-use token)
+   * and `chargeSavedCard` (a token freshly minted from a saved card). Adapts
+   * the order response back into `MpPaymentResult`, the same shape the
+   * classic Payments API path this replaces already returned, so neither
+   * caller needs to change how it reads the result.
+   */
+  private async chargeOnlineOrder(input: {
+    token: string;
+    amount: number;
+    description?: string;
+    externalReference?: string;
+    idempotencyKey: string;
+    customerId?: string;
+    payerEmail?: string;
+    paymentMethodId: string;
+    paymentTypeId: string;
+    /** Only the new-card checkout path needs the extra getCard round trip. */
+    includeCardDetails: boolean;
+  }): Promise<MpPaymentResult> {
+    const sdkConfig = this.getSdkConfig();
+    const amountStr = input.amount.toFixed(2);
+    try {
+      const orderClient = new Order(sdkConfig);
+      const order = await orderClient.create({
+        body: {
+          type: 'online',
+          processing_mode: 'automatic',
+          external_reference: input.externalReference,
+          total_amount: amountStr,
+          description: input.description,
+          payer: input.customerId
+            ? { customer_id: input.customerId }
+            : { email: input.payerEmail },
+          transactions: {
+            payments: [
+              {
+                amount: amountStr,
+                payment_method: {
+                  id: input.paymentMethodId,
+                  type: input.paymentTypeId,
+                  token: input.token,
+                  installments: 1,
+                },
+              },
+            ],
+          },
+        },
+        requestOptions: { idempotencyKey: input.idempotencyKey },
+      });
+
+      const txPayment = order.transactions?.payments?.[0];
+      if (!txPayment?.id) {
+        throw new Error(
+          'Mercado Pago did not return a transaction payment id.',
+        );
+      }
+
+      let card: MpPaymentResult['card'];
+      const cardId = txPayment.payment_method?.card_id;
+      if (input.includeCardDetails && input.customerId && cardId) {
+        const savedCard = await this.getCard(input.customerId, cardId);
+        if (savedCard?.lastFourDigits !== undefined) {
+          card = {
+            id: savedCard.id,
+            lastFourDigits: savedCard.lastFourDigits,
+            paymentMethodId: savedCard.paymentMethodId,
+            expirationMonth: savedCard.expirationMonth,
+            expirationYear: savedCard.expirationYear,
+          };
+        }
+      }
+
+      return {
+        id: String(txPayment.id),
+        status: mapOrderStatusToPaymentStatus(order.status),
+        statusDetail: order.status_detail,
+        transactionAmount:
+          order.total_paid_amount !== undefined
+            ? Number(order.total_paid_amount)
+            : undefined,
+        externalReference: order.external_reference,
+        mpOrderId: order.id,
+        card,
+      };
+    } catch (err) {
+      throw this.wrapError('chargeOnlineOrder', err);
+    }
+  }
+
+  /**
    * Charges a previously saved card. A saved card's id cannot be charged
    * directly as a payment token — Mercado Pago requires a fresh, single-use
    * token minted from the saved card immediately before the charge, which is
@@ -526,36 +621,18 @@ export class MercadoPagoClient {
    * failure to complete the call at all throws.
    */
   async chargeCardToken(input: ChargeCardTokenInput): Promise<MpPaymentResult> {
-    const sdkConfig = this.getSdkConfig();
-    const {
-      token,
-      amount,
-      description,
-      externalReference,
-      idempotencyKey,
-      customerId,
-      payerEmail,
-    } = input;
-    try {
-      const paymentClient = new Payment(sdkConfig);
-      const payment = await paymentClient.create({
-        body: {
-          transaction_amount: amount,
-          token,
-          description,
-          external_reference: externalReference,
-          payer: customerId
-            ? { type: 'customer', id: customerId }
-            : { email: payerEmail },
-          installments: 1,
-          capture: true,
-        },
-        requestOptions: { idempotencyKey },
-      });
-      return this.normalizePayment(payment);
-    } catch (err) {
-      throw this.wrapError('chargeCardToken', err);
-    }
+    return this.chargeOnlineOrder({
+      token: input.token,
+      amount: input.amount,
+      description: input.description,
+      externalReference: input.externalReference,
+      idempotencyKey: input.idempotencyKey,
+      customerId: input.customerId,
+      payerEmail: input.payerEmail,
+      paymentMethodId: input.paymentMethodId,
+      paymentTypeId: input.paymentTypeId,
+      includeCardDetails: true,
+    });
   }
 
   async getPayment(mpPaymentId: string): Promise<MpPaymentResult> {

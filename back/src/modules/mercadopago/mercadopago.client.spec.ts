@@ -32,6 +32,27 @@ interface PaymentLike {
 
 const paymentCreate = jest.fn<Promise<PaymentLike>, [PaymentCreateArgs]>();
 
+interface OrderCreateArgs {
+  body: Record<string, unknown>;
+  requestOptions: { idempotencyKey: string };
+}
+
+interface OrderLike {
+  id?: string;
+  status?: string;
+  status_detail?: string;
+  external_reference?: string;
+  total_paid_amount?: number;
+  transactions?: {
+    payments?: Array<{
+      id?: string;
+      payment_method?: { id?: string; type?: string; card_id?: string };
+    }>;
+  };
+}
+
+const orderCreate = jest.fn<Promise<OrderLike>, [OrderCreateArgs]>();
+
 jest.mock('mercadopago', () => ({
   __esModule: true,
   default: jest.fn().mockImplementation(() => ({})),
@@ -39,7 +60,11 @@ jest.mock('mercadopago', () => ({
   Customer: jest.fn().mockImplementation(() => ({})),
   CardToken: jest.fn().mockImplementation(() => ({})),
   PaymentRefund: jest.fn().mockImplementation(() => ({})),
-  Order: jest.fn().mockImplementation(() => ({})),
+  Order: jest.fn().mockImplementation(() => ({
+    create: orderCreate,
+    get: jest.fn(),
+    cancel: jest.fn(),
+  })),
 }));
 
 const configOf = (env: Record<string, string | undefined>) =>
@@ -87,13 +112,18 @@ describe('MercadoPagoClient', () => {
   });
 
   describe('MercadoPagoClient.chargeCardToken', () => {
-    it('sends the token, amount and external reference', async () => {
-      paymentCreate.mockResolvedValue({
-        id: 123,
-        status: 'approved',
+    beforeEach(() => {
+      orderCreate.mockReset();
+    });
+
+    it('sends an online order with the token, amount and payment method', async () => {
+      orderCreate.mockResolvedValue({
+        id: 'ORD01',
+        status: 'processed',
         status_detail: 'accredited',
-        transaction_amount: 19995,
         external_reference: 'flg-user-3-abcd1234',
+        total_paid_amount: 19995,
+        transactions: { payments: [{ id: '123' }] },
       });
 
       const result = await client.chargeCardToken({
@@ -102,25 +132,47 @@ describe('MercadoPagoClient', () => {
         externalReference: 'flg-user-3-abcd1234',
         idempotencyKey: 'checkout-tok_abc',
         description: 'Membresía FLG',
+        paymentMethodId: 'visa',
+        paymentTypeId: 'credit_card',
       });
 
-      expect(paymentCreate).toHaveBeenCalledWith({
+      expect(orderCreate).toHaveBeenCalledWith({
         body: expect.objectContaining({
-          transaction_amount: 19995,
-          token: 'tok_abc',
+          type: 'online',
+          processing_mode: 'automatic',
           external_reference: 'flg-user-3-abcd1234',
-          installments: 1,
-          capture: true,
+          total_amount: '19995.00',
+          transactions: {
+            payments: [
+              {
+                amount: '19995.00',
+                payment_method: {
+                  id: 'visa',
+                  type: 'credit_card',
+                  token: 'tok_abc',
+                  installments: 1,
+                },
+              },
+            ],
+          },
         }) as Record<string, unknown>,
         requestOptions: { idempotencyKey: 'checkout-tok_abc' },
       });
       expect(result).toEqual(
-        expect.objectContaining({ id: '123', status: 'approved' }),
+        expect.objectContaining({
+          id: '123',
+          status: 'approved',
+          mpOrderId: 'ORD01',
+        }),
       );
     });
 
     it('scopes the payer to a customer when one is given', async () => {
-      paymentCreate.mockResolvedValue({ id: 124, status: 'approved' });
+      orderCreate.mockResolvedValue({
+        id: 'ORD02',
+        status: 'processed',
+        transactions: { payments: [{ id: '124' }] },
+      });
 
       await client.chargeCardToken({
         token: 'tok_abc',
@@ -128,16 +180,22 @@ describe('MercadoPagoClient', () => {
         externalReference: 'flg-user-3-abcd1234',
         idempotencyKey: 'checkout-tok_abc',
         customerId: 'cus_1',
+        paymentMethodId: 'visa',
+        paymentTypeId: 'credit_card',
       });
 
-      const body = paymentCreate.mock.calls[0][0].body as {
-        payer: { type: string; id: string };
+      const body = orderCreate.mock.calls[0][0].body as {
+        payer: { customer_id: string };
       };
-      expect(body.payer).toEqual({ type: 'customer', id: 'cus_1' });
+      expect(body.payer).toEqual({ customer_id: 'cus_1' });
     });
 
     it('falls back to a plain email payer with no customer', async () => {
-      paymentCreate.mockResolvedValue({ id: 125, status: 'approved' });
+      orderCreate.mockResolvedValue({
+        id: 'ORD03',
+        status: 'processed',
+        transactions: { payments: [{ id: '125' }] },
+      });
 
       await client.chargeCardToken({
         token: 'tok_abc',
@@ -145,16 +203,18 @@ describe('MercadoPagoClient', () => {
         externalReference: 'flg-user-3-abcd1234',
         idempotencyKey: 'checkout-tok_abc',
         payerEmail: 'rosa@gmail.com',
+        paymentMethodId: 'visa',
+        paymentTypeId: 'credit_card',
       });
 
-      const body = paymentCreate.mock.calls[0][0].body as {
+      const body = orderCreate.mock.calls[0][0].body as {
         payer: { email: string };
       };
       expect(body.payer).toEqual({ email: 'rosa@gmail.com' });
     });
 
     it('wraps an SDK failure as MercadoPagoUnavailableError', async () => {
-      paymentCreate.mockRejectedValue(new Error('network down'));
+      orderCreate.mockRejectedValue(new Error('network down'));
 
       await expect(
         client.chargeCardToken({
@@ -162,15 +222,18 @@ describe('MercadoPagoClient', () => {
           amount: 19995,
           externalReference: 'flg-user-3-abcd1234',
           idempotencyKey: 'checkout-tok_abc',
+          paymentMethodId: 'visa',
+          paymentTypeId: 'credit_card',
         }),
       ).rejects.toBeInstanceOf(MercadoPagoUnavailableError);
     });
 
-    it('does not treat a rejected payment as an error', async () => {
-      paymentCreate.mockResolvedValue({
-        id: 126,
-        status: 'rejected',
+    it('does not treat a rejected order as an error', async () => {
+      orderCreate.mockResolvedValue({
+        id: 'ORD04',
+        status: 'failed',
         status_detail: 'cc_rejected_insufficient_amount',
+        transactions: { payments: [{ id: '126' }] },
       });
 
       const result = await client.chargeCardToken({
@@ -178,26 +241,41 @@ describe('MercadoPagoClient', () => {
         amount: 19995,
         externalReference: 'flg-user-3-abcd1234',
         idempotencyKey: 'checkout-tok_abc',
+        paymentMethodId: 'visa',
+        paymentTypeId: 'credit_card',
       });
 
       expect(result.status).toBe('rejected');
       expect(result.statusDetail).toBe('cc_rejected_insufficient_amount');
     });
 
-    it('reports the card the payment was made with', async () => {
-      // This is the only card data the checkout gets: the token it charged
-      // with is single-use and already spent, so a SavedCard row can only be
-      // written from the payment's own response.
-      paymentCreate.mockResolvedValue({
-        id: 127,
-        status: 'approved',
-        payment_method_id: 'visa',
-        card: {
-          id: 'card_9',
-          last_four_digits: '4242',
-          expiration_month: 12,
-          expiration_year: 2030,
+    it('reports the card the payment was made with, when saving to a customer', async () => {
+      orderCreate.mockResolvedValue({
+        id: 'ORD05',
+        status: 'processed',
+        transactions: {
+          payments: [
+            {
+              id: '127',
+              payment_method: {
+                id: 'visa',
+                type: 'credit_card',
+                card_id: 'card_9',
+              },
+            },
+          ],
         },
+      });
+      // jest.spyOn rather than a raw `client.getCard = jest.fn()` reassignment
+      // so the assertion below references a plain mock variable, not the
+      // class method itself (@typescript-eslint/unbound-method flags the
+      // latter as an unbound method reference).
+      const getCardSpy = jest.spyOn(client, 'getCard').mockResolvedValue({
+        id: 'card_9',
+        lastFourDigits: '4242',
+        paymentMethodId: 'visa',
+        expirationMonth: 12,
+        expirationYear: 2030,
       });
 
       const result = await client.chargeCardToken({
@@ -206,8 +284,11 @@ describe('MercadoPagoClient', () => {
         externalReference: 'flg-user-3-abcd1234',
         idempotencyKey: 'checkout-tok_abc',
         customerId: 'cus_1',
+        paymentMethodId: 'visa',
+        paymentTypeId: 'credit_card',
       });
 
+      expect(getCardSpy).toHaveBeenCalledWith('cus_1', 'card_9');
       expect(result.card).toEqual({
         id: 'card_9',
         lastFourDigits: '4242',
@@ -217,22 +298,28 @@ describe('MercadoPagoClient', () => {
       });
     });
 
-    it('reports no card when the response carries none', async () => {
-      // A rejected payment can come back with an empty card object; an empty
-      // shell must not read as a card worth saving.
-      paymentCreate.mockResolvedValue({
-        id: 128,
-        status: 'rejected',
-        card: {},
+    it('does not look up a card when there is no customer to save to', async () => {
+      orderCreate.mockResolvedValue({
+        id: 'ORD06',
+        status: 'processed',
+        transactions: {
+          payments: [
+            { id: '128', payment_method: { id: 'visa', card_id: 'card_9' } },
+          ],
+        },
       });
+      const getCardSpy = jest.spyOn(client, 'getCard');
 
       const result = await client.chargeCardToken({
         token: 'tok_abc',
         amount: 19995,
         externalReference: 'flg-user-3-abcd1234',
         idempotencyKey: 'checkout-tok_abc',
+        paymentMethodId: 'visa',
+        paymentTypeId: 'credit_card',
       });
 
+      expect(getCardSpy).not.toHaveBeenCalled();
       expect(result.card).toBeUndefined();
     });
   });

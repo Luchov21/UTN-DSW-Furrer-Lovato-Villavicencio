@@ -30,6 +30,15 @@ export interface CheckoutResult {
   months?: number;
 }
 
+export interface CheckoutStatusResult {
+  status: 'pending' | 'approved' | 'rejected';
+  paymentId?: number;
+  newEndDate?: string;
+  planName?: string;
+  amount?: number;
+  months?: number;
+}
+
 /**
  * The priced summary of selling `plan` for `months`, and every term the plan
  * offers. Pure — the caller loads the plan and its durations.

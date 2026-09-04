@@ -11,6 +11,7 @@ import { CheckoutSummaryQueryDto } from './dto/checkout-summary-query-dto';
 import { CheckoutDto } from './dto/checkout-dto';
 import { CheckoutPreferenceDto } from './dto/checkout-preference-dto';
 import { CheckoutArmDto } from './dto/checkout-arm-dto';
+import { CheckoutStatusQueryDto } from './dto/checkout-status-query-dto';
 
 @Controller('api/v1/checkout')
 @ApiTags('Checkout')
@@ -54,5 +55,15 @@ export class CheckoutController {
   @HttpCode(204)
   arm(@ActiveUser() user: UserActiveInterface, @Body() dto: CheckoutArmDto) {
     return this.checkoutService.armOrder(user.sub, dto);
+  }
+
+  // Polled by /checkout/return while the webhook settles a wallet payment.
+  @Get('status')
+  @Auth(Role.USER)
+  getStatus(
+    @ActiveUser() user: UserActiveInterface,
+    @Query() query: CheckoutStatusQueryDto,
+  ) {
+    return this.checkoutService.getStatus(user.sub, query.externalReference);
   }
 }

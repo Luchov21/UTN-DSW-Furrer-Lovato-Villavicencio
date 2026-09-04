@@ -28,6 +28,7 @@ import type { CheckoutArmDto } from './dto/checkout-arm-dto';
 import {
   buildSummary,
   type CheckoutResult,
+  type CheckoutStatusResult,
   type CheckoutSummary,
 } from './checkout.rules';
 
@@ -154,6 +155,47 @@ export class CheckoutService {
       adminId: null,
       externalReference: dto.externalReference,
     });
+  }
+
+  /**
+   * What /checkout/return polls. This — never Mercado Pago's back_urls query
+   * parameters — is the only thing allowed to say a payment succeeded. See
+   * the spec's D6: deciding from `?status=approved` would grant a membership
+   * to anyone who types the URL.
+   */
+  async getStatus(
+    userId: number,
+    externalReference: string,
+  ): Promise<CheckoutStatusResult> {
+    const order =
+      await this.chargeOrderService.findByExternalReference(externalReference);
+
+    // One 404 for "no such order" and for "not yours": a 403 on the second
+    // would confirm the reference exists.
+    if (!order || order.userId !== userId) {
+      throw new NotFoundException('La orden de pago no existe.');
+    }
+
+    const paid: string = ChargeOrderStatus.PAID;
+    const pending: string = ChargeOrderStatus.PENDING;
+
+    if (order.status === paid) {
+      return {
+        status: 'approved',
+        paymentId: order.paymentId ?? undefined,
+        newEndDate: order.subscription
+          ? String(order.subscription.endDate).slice(0, 10)
+          : undefined,
+        planName: order.subscription?.plan?.name,
+        amount: Number(order.amount),
+        months: order.termMonths,
+      };
+    }
+
+    // Anything that is not paid and not still live — error, cancelled,
+    // expired — is a dead end the member should be told about, not a spinner
+    // that never resolves.
+    return { status: order.status === pending ? 'pending' : 'rejected' };
   }
 
   /**

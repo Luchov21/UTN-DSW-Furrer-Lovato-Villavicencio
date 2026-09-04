@@ -550,4 +550,79 @@ describe('CheckoutService.pay', () => {
       );
     });
   });
+
+  describe('CheckoutService.getStatus', () => {
+    const reference = 'flg-user-7-a1b2c3d4';
+
+    it('reports a live order as pending', async () => {
+      chargeOrders.findByExternalReference.mockResolvedValue({
+        userId: 7,
+        status: 'pendiente',
+        amount: 19995,
+        termMonths: 1,
+        planId: 12,
+      });
+
+      expect(await service.getStatus(7, reference)).toEqual({
+        status: 'pending',
+      });
+    });
+
+    it('reports a closed order as approved, with what the receipt shows', async () => {
+      chargeOrders.findByExternalReference.mockResolvedValue({
+        userId: 7,
+        status: 'pagada',
+        amount: 19995,
+        termMonths: 1,
+        planId: 12,
+        paymentId: 55,
+        subscription: {
+          endDate: '2027-03-04',
+          plan: { name: 'Plan Full' },
+        },
+      });
+
+      expect(await service.getStatus(7, reference)).toEqual({
+        status: 'approved',
+        paymentId: 55,
+        newEndDate: '2027-03-04',
+        planName: 'Plan Full',
+        amount: 19995,
+        months: 1,
+      });
+    });
+
+    it('reports an errored order as rejected', async () => {
+      chargeOrders.findByExternalReference.mockResolvedValue({
+        userId: 7,
+        status: 'error',
+        amount: 19995,
+        termMonths: 1,
+        planId: 12,
+      });
+
+      expect(await service.getStatus(7, reference)).toEqual({
+        status: 'rejected',
+      });
+    });
+
+    it('404s on another member’s reference rather than confirming it exists', async () => {
+      chargeOrders.findByExternalReference.mockResolvedValue({
+        userId: 99,
+        status: 'pagada',
+      });
+
+      await expect(service.getStatus(7, reference)).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+    });
+
+    it('404s on an unknown reference', async () => {
+      chargeOrders.findByExternalReference.mockResolvedValue(null);
+
+      await expect(service.getStatus(7, reference)).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+    });
+  });
 });

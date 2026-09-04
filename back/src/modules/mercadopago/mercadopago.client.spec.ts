@@ -6,32 +6,9 @@ import {
 } from './mercadopago.client';
 
 // The SDK's client classes (Payment, Customer, ...) are constructed fresh
-// per call — `new Payment(sdkConfig)` inside each MercadoPagoClient method —
+// per call — `new Order(sdkConfig)` inside each MercadoPagoClient method —
 // rather than injected, so the whole `mercadopago` module is mocked here.
-// Each class's methods are backed by a jest.fn() the tests assert against;
-// only `create` is stubbed for now since it's all `chargeCardToken` uses.
-interface PaymentCreateArgs {
-  body: Record<string, unknown>;
-  requestOptions: { idempotencyKey: string };
-}
-
-interface PaymentLike {
-  id: number;
-  status?: string;
-  status_detail?: string;
-  transaction_amount?: number;
-  external_reference?: string;
-  payment_method_id?: string;
-  card?: {
-    id?: string;
-    last_four_digits?: string;
-    expiration_month?: number;
-    expiration_year?: number;
-  };
-}
-
-const paymentCreate = jest.fn<Promise<PaymentLike>, [PaymentCreateArgs]>();
-
+// Each class's methods are backed by a jest.fn() the tests assert against.
 interface OrderCreateArgs {
   body: Record<string, unknown>;
   requestOptions: { idempotencyKey: string };
@@ -53,12 +30,22 @@ interface OrderLike {
 
 const orderCreate = jest.fn<Promise<OrderLike>, [OrderCreateArgs]>();
 
+interface CardTokenCreateArgs {
+  body: { card_id: string; customer_id: string };
+}
+
+interface CardTokenLike {
+  id?: string;
+}
+
+let cardTokenCreate: jest.Mock<Promise<CardTokenLike>, [CardTokenCreateArgs]>;
+
 jest.mock('mercadopago', () => ({
   __esModule: true,
   default: jest.fn().mockImplementation(() => ({})),
-  Payment: jest.fn().mockImplementation(() => ({ create: paymentCreate })),
+  Payment: jest.fn().mockImplementation(() => ({})),
   Customer: jest.fn().mockImplementation(() => ({})),
-  CardToken: jest.fn().mockImplementation(() => ({})),
+  CardToken: jest.fn().mockImplementation(() => ({ create: cardTokenCreate })),
   PaymentRefund: jest.fn().mockImplementation(() => ({})),
   Order: jest.fn().mockImplementation(() => ({
     create: orderCreate,
@@ -107,7 +94,6 @@ describe('MercadoPagoClient', () => {
   let client: MercadoPagoClient;
 
   beforeEach(() => {
-    paymentCreate.mockReset();
     client = new MercadoPagoClient(configOf(ENABLED_ENV));
   });
 
@@ -321,6 +307,96 @@ describe('MercadoPagoClient', () => {
 
       expect(getCardSpy).not.toHaveBeenCalled();
       expect(result.card).toBeUndefined();
+    });
+  });
+
+  describe('MercadoPagoClient.chargeSavedCard', () => {
+    beforeEach(() => {
+      orderCreate.mockReset();
+      cardTokenCreate = jest.fn<
+        Promise<CardTokenLike>,
+        [CardTokenCreateArgs]
+      >();
+    });
+
+    it('mints a fresh token from the saved card, then charges it as an online order', async () => {
+      cardTokenCreate.mockResolvedValue({ id: 'fresh_tok_1' });
+      orderCreate.mockResolvedValue({
+        id: 'ORD10',
+        status: 'processed',
+        transactions: { payments: [{ id: '200' }] },
+      });
+      const result = await client.chargeSavedCard({
+        customerId: 'cus_1',
+        cardId: 'card_1',
+        amount: 12000,
+        description: 'Renovación',
+        idempotencyKey: 'renewal-7-2026-09-10',
+        paymentMethodId: 'master',
+        paymentTypeId: 'credit_card',
+      });
+
+      expect(cardTokenCreate).toHaveBeenCalledWith({
+        body: { card_id: 'card_1', customer_id: 'cus_1' },
+      });
+      const body = orderCreate.mock.calls[0][0].body as {
+        payer: { customer_id: string };
+        transactions: {
+          payments: Array<{ payment_method: { token: string } }>;
+        };
+      };
+      expect(body.payer).toEqual({ customer_id: 'cus_1' });
+      expect(body.transactions.payments[0].payment_method.token).toBe(
+        'fresh_tok_1',
+      );
+      expect(result).toEqual(
+        expect.objectContaining({ id: '200', status: 'approved' }),
+      );
+    });
+
+    it('does not fetch card details for a renewal charge', async () => {
+      cardTokenCreate.mockResolvedValue({ id: 'fresh_tok_2' });
+      orderCreate.mockResolvedValue({
+        id: 'ORD11',
+        status: 'processed',
+        transactions: {
+          payments: [
+            { id: '201', payment_method: { id: 'master', card_id: 'card_1' } },
+          ],
+        },
+      });
+      // jest.spyOn rather than a raw `client.getCard = jest.fn()` reassignment
+      // so the assertion below references a plain mock variable, not the
+      // class method itself (@typescript-eslint/unbound-method flags the
+      // latter as an unbound method reference) — same pattern used above for
+      // chargeCardToken.
+      const getCardSpy = jest.spyOn(client, 'getCard');
+
+      await client.chargeSavedCard({
+        customerId: 'cus_1',
+        cardId: 'card_1',
+        amount: 12000,
+        idempotencyKey: 'renewal-7-2026-09-10',
+        paymentMethodId: 'master',
+        paymentTypeId: 'credit_card',
+      });
+
+      expect(getCardSpy).not.toHaveBeenCalled();
+    });
+
+    it('wraps a token-minting failure as MercadoPagoUnavailableError', async () => {
+      cardTokenCreate.mockRejectedValue(new Error('card token minting failed'));
+
+      await expect(
+        client.chargeSavedCard({
+          customerId: 'cus_1',
+          cardId: 'card_1',
+          amount: 12000,
+          idempotencyKey: 'renewal-7-2026-09-10',
+          paymentMethodId: 'master',
+          paymentTypeId: 'credit_card',
+        }),
+      ).rejects.toBeInstanceOf(MercadoPagoUnavailableError);
     });
   });
 

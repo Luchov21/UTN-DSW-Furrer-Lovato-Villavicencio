@@ -106,6 +106,10 @@ export interface ChargeSavedCardInput {
   amount: number;
   description?: string;
   idempotencyKey: string;
+  /** Card brand, e.g. `master` — from the SavedCard row. */
+  paymentMethodId: string;
+  /** `credit_card` or `debit_card` — from the SavedCard row. */
+  paymentTypeId: string;
 }
 
 export interface ChargeCardTokenInput {
@@ -584,31 +588,29 @@ export class MercadoPagoClient {
   async chargeSavedCard(input: ChargeSavedCardInput): Promise<MpPaymentResult> {
     const sdkConfig = this.getSdkConfig();
     const { customerId, cardId, amount, description, idempotencyKey } = input;
+    let freshToken: SdkCardTokenResponse;
     try {
       const cardTokenClient = new CardToken(sdkConfig);
-      const freshToken: SdkCardTokenResponse = await cardTokenClient.create({
+      freshToken = await cardTokenClient.create({
         body: { card_id: cardId, customer_id: customerId },
       });
       if (!freshToken.id) {
         throw new Error('Mercado Pago did not return a fresh card token.');
       }
-
-      const paymentClient = new Payment(sdkConfig);
-      const payment = await paymentClient.create({
-        body: {
-          transaction_amount: amount,
-          token: freshToken.id,
-          description,
-          payer: { type: 'customer', id: customerId },
-          installments: 1,
-          capture: true,
-        },
-        requestOptions: { idempotencyKey },
-      });
-      return this.normalizePayment(payment);
     } catch (err) {
       throw this.wrapError('chargeSavedCard', err);
     }
+
+    return this.chargeOnlineOrder({
+      token: freshToken.id,
+      amount,
+      description,
+      idempotencyKey,
+      customerId,
+      paymentMethodId: input.paymentMethodId,
+      paymentTypeId: input.paymentTypeId,
+      includeCardDetails: false,
+    });
   }
 
   /**

@@ -269,7 +269,12 @@ describe('CheckoutService.pay', () => {
     });
 
     expect(mercadoPago.chargeSavedCard).toHaveBeenCalledWith(
-      expect.objectContaining({ customerId: 'cus_1', cardId: 'card_1' }),
+      expect.objectContaining({
+        customerId: 'cus_1',
+        cardId: 'card_1',
+        paymentMethodId: 'visa',
+        paymentTypeId: 'credit_card',
+      }),
     );
     expect(mercadoPago.chargeCardToken).not.toHaveBeenCalled();
   });

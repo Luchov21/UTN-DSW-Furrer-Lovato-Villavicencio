@@ -13,6 +13,8 @@ import { ClassRegistrationController } from '../../modules/classRegistration/cla
 import { ClassRegistrationService } from '../../modules/classRegistration/classRegistration.service';
 import { ClassSessionController } from '../../modules/classSession/classSession.controller';
 import { ClassSessionService } from '../../modules/classSession/classSession.service';
+import { CheckoutController } from '../../modules/checkout/checkout.controller';
+import { CheckoutService } from '../../modules/checkout/checkout.service';
 import { ContactController } from '../../modules/contact/contact.controller';
 import { ContactService } from '../../modules/contact/contact.service';
 import { PaymentController } from '../../modules/payment/payment.controller';
@@ -415,6 +417,38 @@ describe('ClassSessionController authorization', () => {
 
   it('restricts PATCH /classSession/restore/:id to an admin', async () => {
     await adminOnly(app, 'patch', '/api/v1/classSession/restore/1');
+  });
+});
+
+describe('CheckoutController authorization', () => {
+  let app: INestApplication;
+
+  beforeAll(async () => {
+    app = await buildAuthzApp(CheckoutController, [
+      {
+        provide: CheckoutService,
+        useValue: {
+          getSummary: jest.fn().mockResolvedValue({}),
+          pay: jest.fn().mockResolvedValue({}),
+        },
+      },
+    ]);
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  // Public on purpose: a guest prices a plan on /checkout before they have an
+  // account, and this returns plan pricing only — no member data.
+  it('opens GET /checkout/summary to everyone', async () => {
+    await unguarded(app, 'get', '/api/v1/checkout/summary');
+  });
+
+  // @Auth(Role.USER): a login is required, the admin role is not — an admin
+  // buying their own membership is a member here like anyone else.
+  it('requires a login for POST /checkout, any role', async () => {
+    await anyLoggedIn(app, 'post', '/api/v1/checkout');
   });
 });
 

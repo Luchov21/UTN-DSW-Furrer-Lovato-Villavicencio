@@ -274,7 +274,7 @@ const PaymentsSection = () => {
             <Receipt className="mx-auto h-10 w-10 text-text-muted" />
             <p className="mt-3 font-body text-sm text-text-muted">
               Todavía no tenés pagos registrados. Acá van a aparecer tus pagos
-              online.
+              online y los que registre el gimnasio.
             </p>
           </Card>
         ) : (

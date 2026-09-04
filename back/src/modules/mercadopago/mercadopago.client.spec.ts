@@ -20,6 +20,13 @@ interface PaymentLike {
   status_detail?: string;
   transaction_amount?: number;
   external_reference?: string;
+  payment_method_id?: string;
+  card?: {
+    id?: string;
+    last_four_digits?: string;
+    expiration_month?: number;
+    expiration_year?: number;
+  };
 }
 
 const paymentCreate = jest.fn<Promise<PaymentLike>, [PaymentCreateArgs]>();
@@ -148,6 +155,58 @@ describe('MercadoPagoClient', () => {
 
       expect(result.status).toBe('rejected');
       expect(result.statusDetail).toBe('cc_rejected_insufficient_amount');
+    });
+
+    it('reports the card the payment was made with', async () => {
+      // This is the only card data the checkout gets: the token it charged
+      // with is single-use and already spent, so a SavedCard row can only be
+      // written from the payment's own response.
+      paymentCreate.mockResolvedValue({
+        id: 127,
+        status: 'approved',
+        payment_method_id: 'visa',
+        card: {
+          id: 'card_9',
+          last_four_digits: '4242',
+          expiration_month: 12,
+          expiration_year: 2030,
+        },
+      });
+
+      const result = await client.chargeCardToken({
+        token: 'tok_abc',
+        amount: 19995,
+        externalReference: 'flg-user-3-abcd1234',
+        idempotencyKey: 'checkout-tok_abc',
+        customerId: 'cus_1',
+      });
+
+      expect(result.card).toEqual({
+        id: 'card_9',
+        lastFourDigits: '4242',
+        paymentMethodId: 'visa',
+        expirationMonth: 12,
+        expirationYear: 2030,
+      });
+    });
+
+    it('reports no card when the response carries none', async () => {
+      // A rejected payment can come back with an empty card object; an empty
+      // shell must not read as a card worth saving.
+      paymentCreate.mockResolvedValue({
+        id: 128,
+        status: 'rejected',
+        card: {},
+      });
+
+      const result = await client.chargeCardToken({
+        token: 'tok_abc',
+        amount: 19995,
+        externalReference: 'flg-user-3-abcd1234',
+        idempotencyKey: 'checkout-tok_abc',
+      });
+
+      expect(result.card).toBeUndefined();
     });
   });
 });

@@ -103,6 +103,24 @@ export interface MpPaymentResult {
    * external_reference on that call yet.
    */
   externalReference?: string;
+  /**
+   * The card this payment was made with, as Mercado Pago echoes it back on
+   * the payment itself. When the charge was scoped to a customer, `id` is
+   * that customer's saved card id — which is what lets the checkout persist
+   * a `SavedCard` with no second API call, the token having already been
+   * spent by the charge.
+   *
+   * Absent whenever the response carries no card at all (a rejected payment,
+   * a non-card method). Every sub-field but `id` mirrors the SDK's own
+   * optionality, so a caller that needs a complete card must check them.
+   */
+  card?: {
+    id: string;
+    lastFourDigits?: string;
+    paymentMethodId?: string;
+    expirationMonth?: number;
+    expirationYear?: number;
+  };
 }
 
 export interface MpRefundResult {
@@ -257,12 +275,27 @@ export class MercadoPagoClient {
     if (payment.id === undefined) {
       throw new Error('Mercado Pago did not return a payment id.');
     }
+    // `card` is an empty object on a payment that never had one, so the id —
+    // not the presence of the key — is what decides whether there is a card
+    // worth reporting. payment_method_id lives on the payment, not on the
+    // nested card, exactly as `saveCard` reads it from `payment_method.id`.
+    const card = payment.card?.id
+      ? {
+          id: payment.card.id,
+          lastFourDigits: payment.card.last_four_digits,
+          paymentMethodId: payment.payment_method_id,
+          expirationMonth: payment.card.expiration_month,
+          expirationYear: payment.card.expiration_year,
+        }
+      : undefined;
+
     return {
       id: String(payment.id),
       status: payment.status,
       statusDetail: payment.status_detail,
       transactionAmount: payment.transaction_amount,
       externalReference: payment.external_reference,
+      card,
     };
   }
 

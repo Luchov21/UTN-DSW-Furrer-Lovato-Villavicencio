@@ -28,7 +28,11 @@ describe('CheckoutService.pay', () => {
     findOrCreateCustomer: jest.Mock;
   };
   let payments: { confirmPlanCharge: jest.Mock };
-  let savedCards: { findActiveForUser: jest.Mock; saveForUser: jest.Mock };
+  let savedCards: {
+    findActiveForUser: jest.Mock;
+    saveForUser: jest.Mock;
+    saveFromApprovedPayment: jest.Mock;
+  };
   let subscriptions: { setAutoRenew: jest.Mock };
   let mail: { sendPaymentReceipt: jest.Mock };
 
@@ -38,6 +42,16 @@ describe('CheckoutService.pay', () => {
     price: 19995,
     numDays: 30,
     deleted: false,
+  };
+
+  // What Mercado Pago echoes back on the approved payment — the only source
+  // of card data the checkout has, its token having been spent by the charge.
+  const approvedCard = {
+    id: 'card_9',
+    lastFourDigits: '4242',
+    paymentMethodId: 'visa',
+    expirationMonth: 12,
+    expirationYear: 2030,
   };
 
   const dto = {
@@ -59,9 +73,11 @@ describe('CheckoutService.pay', () => {
       closeAsError: jest.fn().mockResolvedValue(undefined),
     };
     mercadoPago = {
-      chargeCardToken: jest
-        .fn()
-        .mockResolvedValue({ id: '555', status: 'approved' }),
+      chargeCardToken: jest.fn().mockResolvedValue({
+        id: '555',
+        status: 'approved',
+        card: approvedCard,
+      }),
       chargeSavedCard: jest.fn(),
       findOrCreateCustomer: jest.fn().mockResolvedValue({ id: 'cus_1' }),
     };
@@ -76,7 +92,11 @@ describe('CheckoutService.pay', () => {
         },
       }),
     };
-    savedCards = { findActiveForUser: jest.fn(), saveForUser: jest.fn() };
+    savedCards = {
+      findActiveForUser: jest.fn(),
+      saveForUser: jest.fn(),
+      saveFromApprovedPayment: jest.fn().mockResolvedValue({ id: 5 }),
+    };
     subscriptions = { setAutoRenew: jest.fn() };
     mail = { sendPaymentReceipt: jest.fn().mockResolvedValue(undefined) };
 
@@ -190,6 +210,26 @@ describe('CheckoutService.pay', () => {
     expect(payments.confirmPlanCharge).not.toHaveBeenCalled();
   });
 
+  it('leaves an in_process order pending so the webhook can finish it', async () => {
+    // Closing it as an error would make ChargeOrderResolverAdapter.resolve
+    // return null when Mercado Pago approves the payment later — the member
+    // charged, with neither a Payment nor a promoted Subscription recorded.
+    mercadoPago.chargeCardToken.mockResolvedValue({
+      id: '557',
+      status: 'in_process',
+      statusDetail: 'pending_review_manual',
+    });
+
+    const result = await service.pay(3, 'rosa@gmail.com', dto);
+
+    expect(result).toEqual({
+      status: 'in_process',
+      statusDetail: 'pending_review_manual',
+    });
+    expect(chargeOrders.closeAsError).not.toHaveBeenCalled();
+    expect(chargeOrders.closeAsPaid).not.toHaveBeenCalled();
+  });
+
   it('closes the order as an error when Mercado Pago is unreachable', async () => {
     mercadoPago.chargeCardToken.mockRejectedValue(
       new MercadoPagoUnavailableError('network down'),
@@ -266,12 +306,20 @@ describe('CheckoutService.pay', () => {
     expect(mercadoPago.findOrCreateCustomer).toHaveBeenCalledWith(
       'rosa@gmail.com',
     );
-    expect(savedCards.saveForUser).toHaveBeenCalled();
+    // From the approved payment's own response, against the customer the
+    // charge was scoped to — never a second Mercado Pago call with the
+    // already-spent token, which is what saveForUser would have done.
+    expect(savedCards.saveFromApprovedPayment).toHaveBeenCalledWith(
+      3,
+      'cus_1',
+      approvedCard,
+    );
+    expect(savedCards.saveForUser).not.toHaveBeenCalled();
     expect(subscriptions.setAutoRenew).toHaveBeenCalledWith(44, true);
   });
 
   it('still completes the sale when saving the card fails', async () => {
-    savedCards.saveForUser.mockRejectedValue(new Error('mp down'));
+    savedCards.saveFromApprovedPayment.mockRejectedValue(new Error('db down'));
 
     const result = await service.pay(3, 'rosa@gmail.com', {
       ...dto,
@@ -279,6 +327,24 @@ describe('CheckoutService.pay', () => {
     });
 
     expect(result.status).toBe('approved');
+  });
+
+  it('skips saving when the approved payment carries no card', async () => {
+    // Nothing to persist and nothing to charge later, so auto-renew stays
+    // off rather than promising a renewal with no card behind it.
+    mercadoPago.chargeCardToken.mockResolvedValue({
+      id: '555',
+      status: 'approved',
+    });
+
+    const result = await service.pay(3, 'rosa@gmail.com', {
+      ...dto,
+      saveCard: true,
+    });
+
+    expect(result.status).toBe('approved');
+    expect(savedCards.saveFromApprovedPayment).not.toHaveBeenCalled();
+    expect(subscriptions.setAutoRenew).not.toHaveBeenCalled();
   });
 
   it('leaves the order pending when the post-approval write fails', async () => {

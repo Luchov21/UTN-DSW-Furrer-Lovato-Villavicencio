@@ -7,6 +7,7 @@ import FormAlert from '../common/FormAlert';
 import GoogleAuthButton from '../common/GoogleAuthButton';
 import LoginSubmitButton from './LoginSubmitButton';
 import { useAuth } from '../../context/useAuth';
+import { returnPathFrom, type FromLocation } from '../../routes/redirects';
 
 // Simple RFC 5322 regex for client-side email format validation
 const EMAIL_REGEX = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
@@ -23,9 +24,13 @@ const LoginForm = ({ onSuccess }: LoginFormProps) => {
   const location = useLocation();
   const { login } = useAuth();
 
-  // Determine redirect target (fallback to home /)
-  const from =
-    (location.state as { from?: { pathname: string } })?.from?.pathname || '/';
+  // Determine redirect target (fallback to home /). The search string is
+  // part of it: a member sent here from /checkout/wallet?plan=12&months=6
+  // carries their whole purchase in the query string, and dropping it lands
+  // them on a wallet page with no plan, which bounces them to /membership.
+  const from = returnPathFrom(
+    (location.state as { from?: FromLocation } | null)?.from,
+  );
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');

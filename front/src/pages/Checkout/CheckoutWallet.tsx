@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { Loader2 } from 'lucide-react';
 import CheckoutLayout from '../../components/checkout/CheckoutLayout';
@@ -37,6 +37,15 @@ function CheckoutWallet() {
   // Drives PaymentSuccess when approved, DeclineBanner otherwise.
   const [result, setResult] = useState<CheckoutResult | null>(null);
 
+  // A ref, not the isPaying state, because state is not updated
+  // synchronously: two clicks landing before React re-renders would both read
+  // isPaying === false and both start a charge. That is a real double charge
+  // on the saved-card path, whose idempotency key is minted fresh per attempt
+  // (checkout-<externalReference>) — the new-card path is already covered by
+  // its key being derived from the single-use token, which Mercado Pago
+  // dedupes on its own. Set before any await, cleared in the finally.
+  const isPayingRef = useRef(false);
+
   // Split from canPay: whether the Brick/pay-button unlock is a function of
   // the checkboxes alone, so it stays true while a payment is in flight
   // instead of flipping the "aceptá los términos" hint back on mid-submit.
@@ -55,6 +64,16 @@ function CheckoutWallet() {
         } else {
           setError('No se pudo calcular el precio del plan.');
         }
+        if (cardRes.status === 'rejected') {
+          // Not fatal: the member can still pay with a new card. But mapping
+          // the failure straight to null makes a broken saved-card endpoint
+          // look exactly like "this member has no card", so say which one it
+          // was — same pattern as ResumenTab's allSettled handler.
+          console.warn(
+            'Could not read the saved card for the checkout',
+            cardRes.reason,
+          );
+        }
         const savedCard =
           cardRes.status === 'fulfilled' ? cardRes.value : null;
         setCard(savedCard);
@@ -69,8 +88,9 @@ function CheckoutWallet() {
       // Reentrancy guard: the Brick's own submit-button lock releases as
       // soon as onToken (synchronous) returns, well before this async call
       // finishes — without this check a double-click can fire two
-      // concurrent charges.
-      if (isPaying) return;
+      // concurrent charges. See isPayingRef on why this is a ref.
+      if (isPayingRef.current) return;
+      isPayingRef.current = true;
       setIsPaying(true);
       setError(null);
       try {
@@ -88,10 +108,11 @@ function CheckoutWallet() {
           err instanceof Error ? err.message : 'No se pudo procesar el pago.',
         );
       } finally {
+        isPayingRef.current = false;
         setIsPaying(false);
       }
     },
-    [planId, months, useSavedCard, saveCard, isPaying],
+    [planId, months, useSavedCard, saveCard],
   );
 
   // A charge in flight must not be abandoned by a stray back/refresh.

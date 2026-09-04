@@ -76,19 +76,27 @@ export class CheckoutService {
     });
 
     let result: MpPaymentResult;
+    // The Mercado Pago customer the charge was scoped to, when the member
+    // asked to save their card. It is the anchor the SavedCard row hangs
+    // off, and only the new-card path ever creates one.
+    let customerId: string | undefined;
     try {
-      result = dto.useSavedCard
-        ? await this.chargeExistingCard(
-            userId,
-            summary,
-            order.externalReference,
-          )
-        : await this.chargeNewCard(
-            dto,
-            email,
-            summary,
-            order.externalReference,
-          );
+      if (dto.useSavedCard) {
+        result = await this.chargeExistingCard(
+          userId,
+          summary,
+          order.externalReference,
+        );
+      } else {
+        const charge = await this.chargeNewCard(
+          dto,
+          email,
+          summary,
+          order.externalReference,
+        );
+        result = charge.result;
+        customerId = charge.customerId;
+      }
     } catch (error) {
       if (error instanceof MercadoPagoUnavailableError) {
         await this.chargeOrderService.closeAsError(
@@ -104,9 +112,9 @@ export class CheckoutService {
       if (error instanceof ConflictException) {
         // No charge was ever attempted on this path, so there is no webhook
         // retry coming to let ChargeOrderResolverAdapter resolve this order
-        // later — and 'online' orders skip the expireStale() sweep (Task 2),
-        // so leaving it PENDING here would strand it forever. Closing it is
-        // safe precisely because nothing was charged.
+        // later — and ChargeOrderService.expireStale() now excludes 'online'
+        // orders from its sweep, so leaving this one PENDING would strand it
+        // forever. Closing it is safe precisely because nothing was charged.
         await this.chargeOrderService.closeAsError(
           order.externalReference,
           error.message,
@@ -116,12 +124,25 @@ export class CheckoutService {
     }
 
     if (result.status !== 'approved') {
-      await this.chargeOrderService.closeAsError(
-        order.externalReference,
-        result.statusDetail ?? result.status ?? 'unknown',
-      );
+      const reason = result.statusDetail ?? result.status ?? 'unknown';
+      // Only a rejection is final. 'in_process' (e.g. pending_review_manual)
+      // is still live at Mercado Pago, and the order MUST stay PENDING:
+      // ChargeOrderResolverAdapter.resolve returns null for anything else, so
+      // closing it here would make the approval webhook find nothing to
+      // resolve — the member charged, with neither a Payment nor a promoted
+      // Subscription to show for it. Online orders are excluded from
+      // expireStale()'s sweep, so the row survives MP's retry window.
+      if (result.status === 'rejected') {
+        await this.chargeOrderService.closeAsError(
+          order.externalReference,
+          reason,
+        );
+        this.logger.warn(`Checkout declined for user ${userId}: ${reason}`);
+        return { status: 'rejected', statusDetail: result.statusDetail };
+      }
+
       this.logger.warn(
-        `Checkout declined for user ${userId}: ${result.statusDetail ?? result.status ?? 'unknown'}`,
+        `Checkout left in process for user ${userId}: ${reason} — order ${order.externalReference} stays pending for the webhook`,
       );
       return {
         status: result.status === 'in_process' ? 'in_process' : 'rejected',
@@ -134,9 +155,9 @@ export class CheckoutService {
         result,
         order.externalReference,
         userId,
-        email,
         dto,
         summary,
+        customerId,
       );
     } catch (error) {
       // Mercado Pago has already taken the money. The order stays PENDING on
@@ -175,12 +196,14 @@ export class CheckoutService {
     });
   }
 
+  // Returns the customer id alongside the charge: the caller needs it to
+  // persist the card afterwards, and it is created here or nowhere.
   private async chargeNewCard(
     dto: CheckoutDto,
     email: string,
     summary: CheckoutSummary,
     externalReference: string,
-  ): Promise<MpPaymentResult> {
+  ): Promise<{ result: MpPaymentResult; customerId?: string }> {
     const token = dto.cardToken as string;
     // Scoping the payment to a customer is what attaches the card to it: the
     // token is single-use and this charge spends it, so there is no second
@@ -189,7 +212,7 @@ export class CheckoutService {
       ? await this.mercadoPagoClient.findOrCreateCustomer(email)
       : undefined;
 
-    return this.mercadoPagoClient.chargeCardToken({
+    const result = await this.mercadoPagoClient.chargeCardToken({
       token,
       amount: summary.total,
       description: `Membresía FLG — ${summary.planName}`,
@@ -198,15 +221,17 @@ export class CheckoutService {
       customerId: customer?.id,
       payerEmail: email,
     });
+
+    return { result, customerId: customer?.id };
   }
 
   private async settle(
     result: MpPaymentResult,
     externalReference: string,
     userId: number,
-    email: string,
     dto: CheckoutDto,
     summary: CheckoutSummary,
+    customerId: string | undefined,
   ): Promise<CheckoutResult> {
     const { payment, subscription } =
       await this.paymentService.confirmPlanCharge({
@@ -236,7 +261,7 @@ export class CheckoutService {
     });
 
     if (dto.saveCard && dto.cardToken) {
-      await this.rememberCard(userId, email, dto.cardToken, subscription.id);
+      await this.rememberCard(userId, customerId, result.card, subscription.id);
     }
 
     return {
@@ -252,14 +277,41 @@ export class CheckoutService {
   // Never allowed to fail the sale: the money is taken and the membership is
   // active, so a failure here costs the member a convenience, not a purchase.
   // The response tells them to add the card from their panel instead.
+  //
+  // The card comes from the approved payment itself, never from a second
+  // Mercado Pago call: the charge above already spent the single-use token,
+  // so savedCardService.saveForUser would fail here every time — silently,
+  // since this method swallows everything. Auto-renew is turned on only
+  // alongside a card that actually persisted; without one it is a promise
+  // the system cannot keep.
   private async rememberCard(
     userId: number,
-    email: string,
-    cardToken: string,
+    customerId: string | undefined,
+    card: MpPaymentResult['card'],
     subscriptionId: number,
   ): Promise<void> {
+    if (
+      !customerId ||
+      !card ||
+      card.lastFourDigits === undefined ||
+      card.paymentMethodId === undefined ||
+      card.expirationMonth === undefined ||
+      card.expirationYear === undefined
+    ) {
+      this.logger.warn(
+        `Approved checkout for user ${userId} carried no complete card to save; skipping the saved card`,
+      );
+      return;
+    }
+
     try {
-      await this.savedCardService.saveForUser(userId, email, cardToken);
+      await this.savedCardService.saveFromApprovedPayment(userId, customerId, {
+        id: card.id,
+        lastFourDigits: card.lastFourDigits,
+        paymentMethodId: card.paymentMethodId,
+        expirationMonth: card.expirationMonth,
+        expirationYear: card.expirationYear,
+      });
       await this.subscriptionService.setAutoRenew(subscriptionId, true);
     } catch (error) {
       this.logger.warn(

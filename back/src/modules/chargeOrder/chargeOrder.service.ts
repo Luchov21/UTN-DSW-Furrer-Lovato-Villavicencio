@@ -6,8 +6,9 @@ import {
 } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { InjectRepository } from '@nestjs/typeorm';
-import { LessThan, Repository } from 'typeorm';
+import { LessThan, Not, Repository } from 'typeorm';
 import { ChargeOrder } from './entity/chargeOrder.entity';
+import { ChargeOrderMethod } from './enum/chargeOrder-method.enum';
 import { ChargeOrderStatus } from './enum/chargeOrder-status.enum';
 import { subscriptionService } from '../subscription/subscription.service';
 import { SubscriptionState } from '../subscription/enum/subscription-state.enum';
@@ -67,6 +68,25 @@ export class ChargeOrderService {
       collectionPointId,
       adminId,
     } = params;
+
+    // Defense in depth for the pairing the rest of this method assumes:
+    // 'online' is the ONLY method without a collection point, and it is the
+    // only one that skips the busy-point lock below. A 'point'/'qr' order
+    // reaching that branch would arm a second live charge on a shared
+    // physical caja with nothing guarding it; an 'online' order carrying a
+    // caja id would key the lock (and the panel) on a caja no one is standing
+    // at. CreateChargeOrderDto already refuses 'online' at the front-desk
+    // endpoint — this catches any caller that gets past it.
+    if (method === 'online' && collectionPointId !== null) {
+      throw new ConflictException(
+        'Un cobro online no puede tener un punto de cobro asignado.',
+      );
+    }
+    if (method !== 'online' && collectionPointId === null) {
+      throw new ConflictException(
+        'Un cobro presencial necesita un punto de cobro.',
+      );
+    }
 
     const member = await this.userService.findUser(userId);
     if (!member || member.deleted) {
@@ -267,15 +287,25 @@ export class ChargeOrderService {
     return this.chargeOrderRepository.save(order);
   }
 
-  // Bulk-flips every PENDING order past its expiresAt to EXPIRED. Called at
-  // the start of createCharge rather than on its own cron, so an abandoned
-  // charge never blocks the counter — see the note there. Mirrors
+  // Bulk-flips every PENDING front-desk order past its expiresAt to EXPIRED.
+  // Called at the start of createCharge rather than on its own cron, so an
+  // abandoned charge never blocks the counter — see the note there. Mirrors
   // subscriptionService.expireLapsedSubscriptions's bulk update() shape.
+  //
+  // 'online' orders are excluded on purpose. They block no collection point,
+  // so nothing is gained by sweeping them — and an in_process checkout leaves
+  // its order PENDING so ChargeOrderResolverAdapter can resolve it when
+  // Mercado Pago's webhook finally reports the outcome. Without this filter,
+  // the next front-desk charge would expire that row (its expiresAt is only
+  // five minutes out) and throw the recovery away. Skipping the sweep for the
+  // online charge itself, as createCharge does, is not enough: any other
+  // charge would still sweep it.
   async expireStale() {
     return this.chargeOrderRepository.update(
       {
         status: ChargeOrderStatus.PENDING,
         expiresAt: LessThan(new Date()),
+        method: Not(ChargeOrderMethod.ONLINE),
       },
       { status: ChargeOrderStatus.EXPIRED, updatedAt: new Date() },
     );

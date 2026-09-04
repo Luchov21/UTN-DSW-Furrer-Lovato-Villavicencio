@@ -50,6 +50,25 @@ describe('ChargeOrderResolverAdapter.resolve', () => {
     });
   });
 
+  it("labels a webhook-recovered online charge 'mercadopago'", async () => {
+    // The same purchase CheckoutService would have recorded synchronously as
+    // 'mercadopago'. Writing 'online' here instead would give one sale two
+    // different labels in the dashboard's "Método" column depending on which
+    // path happened to record it.
+    chargeOrders.findByExternalReference.mockResolvedValue({
+      ...pendingOrder,
+      method: 'online',
+      createdById: null,
+    });
+
+    await expect(adapter.resolve('flg-user-3-a1b2c3d4')).resolves.toEqual(
+      expect.objectContaining({
+        payMethod: 'mercadopago',
+        registeredById: null,
+      }),
+    );
+  });
+
   it('returns null when no order matches the external reference', async () => {
     chargeOrders.findByExternalReference.mockResolvedValue(null);
 

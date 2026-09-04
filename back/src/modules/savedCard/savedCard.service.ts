@@ -8,6 +8,20 @@ import {
 } from '../mercadopago/mercadopago.client';
 import { Subscription } from '../subscription/entity/subscription.entity';
 
+/**
+ * A complete card, ready to be written as a `SavedCard` row. Every field is
+ * required: a half-populated row identifies a payment method the gym cannot
+ * actually charge later.
+ */
+export interface PersistableCard {
+  /** Mercado Pago's own card id, the value charged as `mpCardId`. */
+  id: string;
+  lastFourDigits: string;
+  paymentMethodId: string;
+  expirationMonth: number;
+  expirationYear: number;
+}
+
 @Injectable()
 export class SavedCardService {
   constructor(
@@ -25,15 +39,59 @@ export class SavedCardService {
     private readonly mercadoPagoClient: MercadoPagoClient,
   ) {}
 
+  // Deactivating the previous active card and inserting the new one run in
+  // the SAME transaction so a crash between the two can never leave the
+  // member holding two chargeable cards or none. Shared by both entry points
+  // below, which differ only in where the card data came from.
+  private persistCard(
+    userId: number,
+    mpCustomerId: string,
+    card: PersistableCard,
+  ): Promise<SavedCard> {
+    return this.savedCardRepository.manager.transaction(async (manager) => {
+      await manager.update(
+        SavedCard,
+        { userId, active: true, deleted: false },
+        { active: false },
+      );
+
+      const newCard = manager.create(SavedCard, {
+        userId,
+        mpCustomerId,
+        mpCardId: card.id,
+        lastFourDigits: card.lastFourDigits,
+        paymentMethodId: card.paymentMethodId,
+        expirationMonth: card.expirationMonth,
+        expirationYear: card.expirationYear,
+        active: true,
+        deleted: false,
+      });
+      return manager.save(newCard);
+    });
+  }
+
+  /**
+   * Persists the card a just-approved payment was made with, using only that
+   * payment's own response — no second Mercado Pago call.
+   *
+   * This is what the online checkout must use. Its charge already spent the
+   * single-use card token, so `saveForUser`'s `Customer.createCard` would
+   * fail there every single time; the approved payment already carries the
+   * card id Mercado Pago attached to the customer the charge was scoped to.
+   */
+  async saveFromApprovedPayment(
+    userId: number,
+    mpCustomerId: string,
+    card: PersistableCard,
+  ): Promise<SavedCard> {
+    return this.persistCard(userId, mpCustomerId, card);
+  }
+
   // Tokenizes and saves a new card for the member, replacing whatever card
   // they had before. The Mercado Pago customer lookup/creation and the card
   // tokenization happen first, outside the transaction, since neither
   // touches this database — only the deactivate-previous/insert-new pair
-  // below needs to be atomic.
-  //
-  // Deactivating the previous active card and inserting the new one run in
-  // the SAME transaction so a crash between the two can never leave the
-  // member holding two chargeable cards or none.
+  // needs to be atomic.
   async saveForUser(userId: number, email: string, cardToken: string) {
     const customer = await this.mercadoPagoClient.findOrCreateCustomer(email);
     const mpCard = await this.mercadoPagoClient.saveCard(
@@ -55,25 +113,12 @@ export class SavedCardService {
       );
     }
 
-    return this.savedCardRepository.manager.transaction(async (manager) => {
-      await manager.update(
-        SavedCard,
-        { userId, active: true, deleted: false },
-        { active: false },
-      );
-
-      const newCard = manager.create(SavedCard, {
-        userId,
-        mpCustomerId: customer.id,
-        mpCardId: mpCard.id,
-        lastFourDigits: mpCard.lastFourDigits,
-        paymentMethodId: mpCard.paymentMethodId,
-        expirationMonth: mpCard.expirationMonth,
-        expirationYear: mpCard.expirationYear,
-        active: true,
-        deleted: false,
-      });
-      return manager.save(newCard);
+    return this.persistCard(userId, customer.id, {
+      id: mpCard.id,
+      lastFourDigits: mpCard.lastFourDigits,
+      paymentMethodId: mpCard.paymentMethodId,
+      expirationMonth: mpCard.expirationMonth,
+      expirationYear: mpCard.expirationYear,
     });
   }
 

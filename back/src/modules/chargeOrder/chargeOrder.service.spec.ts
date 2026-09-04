@@ -1,8 +1,10 @@
 import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { ConflictException, NotFoundException } from '@nestjs/common';
+import { FindOperator } from 'typeorm';
 import { ChargeOrderService } from './chargeOrder.service';
 import { ChargeOrder } from './entity/chargeOrder.entity';
+import { ChargeOrderMethod } from './enum/chargeOrder-method.enum';
 import { ChargeOrderStatus } from './enum/chargeOrder-status.enum';
 import { subscriptionService } from '../subscription/subscription.service';
 import { SubscriptionState } from '../subscription/enum/subscription-state.enum';
@@ -392,6 +394,40 @@ describe('ChargeOrderService.createCharge', () => {
     expect(manager.createQueryBuilder).toHaveBeenCalled();
   });
 
+  it('refuses an online order that carries a collection point', async () => {
+    // The pairing the busy-point lock rests on: 'online' is the only method
+    // that skips the lock, so an 'online' order holding a real caja id would
+    // arm a second live charge on a shared physical QR with nothing guarding
+    // it. CreateChargeOrderDto refuses this at the front-desk endpoint; this
+    // is the service's own backstop.
+    await buildService();
+
+    await expect(
+      service.createCharge({
+        ...params,
+        method: 'online',
+        collectionPointId: 'caja-5',
+        adminId: null,
+      }),
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(repository.manager.transaction).not.toHaveBeenCalled();
+  });
+
+  it.each(['point', 'qr'] as const)(
+    'refuses a %s order with no collection point',
+    async (method) => {
+      // The mirror image: a front-desk order with a null caja id would take
+      // the lock on a null key, serialising (or silently skipping) the one
+      // check that keeps two members off the same terminal.
+      await buildService();
+
+      await expect(
+        service.createCharge({ ...params, method, collectionPointId: null }),
+      ).rejects.toBeInstanceOf(ConflictException);
+      expect(repository.manager.transaction).not.toHaveBeenCalled();
+    },
+  );
+
   it('stores an online order with no collection point and no admin', async () => {
     await buildService();
 
@@ -723,5 +759,20 @@ describe('ChargeOrderService.expireStale', () => {
       expect.objectContaining({ status: ChargeOrderStatus.PENDING }),
       expect.objectContaining({ status: ChargeOrderStatus.EXPIRED }),
     );
+  });
+
+  it('never sweeps an online order', async () => {
+    // An online checkout left in_process keeps its order PENDING on purpose,
+    // so ChargeOrderResolverAdapter can still resolve it when Mercado Pago's
+    // webhook reports the outcome. Any front-desk charge running this sweep
+    // must not expire that row out from under the recovery.
+    await service.expireStale();
+
+    const [criteria] = repository.update.mock.calls[0] as [
+      { method?: FindOperator<string> },
+    ];
+    expect(criteria.method).toBeInstanceOf(FindOperator);
+    expect(criteria.method?.type).toBe('not');
+    expect(criteria.method?.value).toBe(ChargeOrderMethod.ONLINE);
   });
 });

@@ -135,6 +135,10 @@ export class RenewalService {
         amount,
         description: `Renovación de membresía — suscripción #${sub.id}`,
         idempotencyKey,
+        paymentMethodId: card.paymentMethodId,
+        // card.paymentTypeId is string | null on the entity; isChargeable,
+        // called just above, already guarantees it's non-null here.
+        paymentTypeId: card.paymentTypeId as string,
       });
     } catch (err) {
       if (err instanceof MercadoPagoUnavailableError) {
@@ -152,6 +156,7 @@ export class RenewalService {
     if (result.status === 'approved') {
       await this.paymentService.createFromMercadoPago({
         mpPaymentId: result.id,
+        mpOrderId: result.mpOrderId,
         subscriptionId: sub.id,
         amount,
         // Auto-renewal always renews by ONE month, never the member's

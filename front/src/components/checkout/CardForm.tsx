@@ -38,21 +38,31 @@ const CardForm = ({ amount, onToken, onError, isBusy }: CardFormProps) => {
     );
   }
 
-  // Only `token`, `payment_method_id` and `payment_type_id` are read from the
-  // Brick's callback. The PAN, the CVV and every other field it returns stay
-  // in the browser and never reach our backend. payment_method_id/
-  // payment_type_id are not PCI-sensitive — they're the card's brand and
-  // type (e.g. "visa"/"credit_card"), which Mercado Pago's Orders API needs
+  // Only `token`, `payment_method_id` and `paymentTypeId` are read from the
+  // Brick's callbacks. The PAN, the CVV and every other field they return
+  // stay in the browser and never reach our backend. payment_method_id/
+  // paymentTypeId are not PCI-sensitive — they're the card's brand and type
+  // (e.g. "visa"/"credit_card"), which Mercado Pago's Orders API needs
   // explicitly to charge the token.
-  const handleSubmit = async (formData: {
-    token: string;
-    payment_method_id: string;
-    payment_type_id: string;
-  }): Promise<void> => {
+  //
+  // paymentTypeId is NOT on the Brick's first onSubmit argument (the SDK's
+  // own ICardPaymentFormData type has no such field) — it only arrives on
+  // the second, `additionalData` argument. Reading it off the first
+  // argument (as this used to) silently sent `undefined`, which the
+  // backend's CheckoutDto correctly rejected as "should not be empty".
+  const handleSubmit = async (
+    formData: { token: string; payment_method_id: string },
+    additionalData?: { paymentTypeId?: string },
+  ): Promise<void> => {
+    if (!additionalData?.paymentTypeId) {
+      onError('No se pudo determinar el tipo de tarjeta. Probá de nuevo.');
+      return;
+    }
+
     onToken({
       token: formData.token,
       paymentMethodId: formData.payment_method_id,
-      paymentTypeId: formData.payment_type_id,
+      paymentTypeId: additionalData.paymentTypeId,
     });
   };
 

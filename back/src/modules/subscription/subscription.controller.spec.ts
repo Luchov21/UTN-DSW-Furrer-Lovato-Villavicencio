@@ -14,6 +14,7 @@ const chargeableCard = {
   deleted: false,
   expirationMonth: 12,
   expirationYear: 2099,
+  paymentTypeId: 'credit_card',
 };
 
 const expiredCard = {

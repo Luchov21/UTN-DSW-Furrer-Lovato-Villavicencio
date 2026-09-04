@@ -281,6 +281,7 @@ describe('MercadoPagoClient', () => {
         id: 'card_9',
         lastFourDigits: '4242',
         paymentMethodId: 'visa',
+        paymentTypeId: 'credit_card',
         expirationMonth: 12,
         expirationYear: 2030,
       });

@@ -193,6 +193,9 @@ export class CheckoutService {
       amount: summary.total,
       description: `Membresía FLG — ${summary.planName}`,
       idempotencyKey: `checkout-${externalReference}`,
+      paymentMethodId: card.paymentMethodId,
+      // isChargeable (checked above) guarantees paymentTypeId is non-null.
+      paymentTypeId: card.paymentTypeId as string,
     });
   }
 
@@ -220,6 +223,8 @@ export class CheckoutService {
       idempotencyKey: `checkout-${token}`,
       customerId: customer?.id,
       payerEmail: email,
+      paymentMethodId: dto.paymentMethodId as string,
+      paymentTypeId: dto.paymentTypeId as string,
     });
 
     return { result, customerId: customer?.id };
@@ -242,6 +247,7 @@ export class CheckoutService {
         amount: summary.total,
         payMethod: 'mercadopago',
         registeredById: null,
+        mpOrderId: result.mpOrderId,
       });
 
     await this.chargeOrderService.closeAsPaid(
@@ -295,6 +301,7 @@ export class CheckoutService {
       !card ||
       card.lastFourDigits === undefined ||
       card.paymentMethodId === undefined ||
+      card.paymentTypeId === undefined ||
       card.expirationMonth === undefined ||
       card.expirationYear === undefined
     ) {
@@ -309,6 +316,7 @@ export class CheckoutService {
         id: card.id,
         lastFourDigits: card.lastFourDigits,
         paymentMethodId: card.paymentMethodId,
+        paymentTypeId: card.paymentTypeId,
         expirationMonth: card.expirationMonth,
         expirationYear: card.expirationYear,
       });

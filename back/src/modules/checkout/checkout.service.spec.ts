@@ -50,6 +50,7 @@ describe('CheckoutService.pay', () => {
     id: 'card_9',
     lastFourDigits: '4242',
     paymentMethodId: 'visa',
+    paymentTypeId: 'credit_card',
     expirationMonth: 12,
     expirationYear: 2030,
   };
@@ -58,6 +59,8 @@ describe('CheckoutService.pay', () => {
     planId: 12,
     months: 1,
     cardToken: 'tok_abc',
+    paymentMethodId: 'visa',
+    paymentTypeId: 'credit_card',
     saveCard: false,
     acceptedTerms: true as const,
   };
@@ -250,6 +253,8 @@ describe('CheckoutService.pay', () => {
       deleted: false,
       expirationMonth: 12,
       expirationYear: 2099,
+      paymentMethodId: 'visa',
+      paymentTypeId: 'credit_card',
     });
     mercadoPago.chargeSavedCard.mockResolvedValue({
       id: '558',
@@ -357,5 +362,51 @@ describe('CheckoutService.pay', () => {
     // the webhook recovery this row exists for.
     expect(chargeOrders.closeAsError).not.toHaveBeenCalled();
     expect(chargeOrders.closeAsPaid).not.toHaveBeenCalled();
+  });
+
+  it('forwards the payment method id and type to chargeCardToken', async () => {
+    await service.pay(3, 'rosa@gmail.com', {
+      ...dto,
+      paymentMethodId: 'visa',
+      paymentTypeId: 'credit_card',
+    });
+
+    expect(mercadoPago.chargeCardToken).toHaveBeenCalledWith(
+      expect.objectContaining({
+        paymentMethodId: 'visa',
+        paymentTypeId: 'credit_card',
+      }),
+    );
+  });
+
+  it('persists mpOrderId on the payment when the charge carries one', async () => {
+    mercadoPago.chargeCardToken.mockResolvedValue({
+      id: '555',
+      status: 'approved',
+      mpOrderId: 'ORD01',
+      card: approvedCard,
+    });
+
+    await service.pay(3, 'rosa@gmail.com', dto);
+
+    expect(payments.confirmPlanCharge).toHaveBeenCalledWith(
+      expect.objectContaining({ mpOrderId: 'ORD01' }),
+    );
+  });
+
+  it("persists the card's paymentTypeId when saving from an approved payment", async () => {
+    mercadoPago.chargeCardToken.mockResolvedValue({
+      id: '555',
+      status: 'approved',
+      card: { ...approvedCard, paymentTypeId: 'credit_card' },
+    });
+
+    await service.pay(3, 'rosa@gmail.com', { ...dto, saveCard: true });
+
+    expect(savedCards.saveFromApprovedPayment).toHaveBeenCalledWith(
+      3,
+      'cus_1',
+      expect.objectContaining({ paymentTypeId: 'credit_card' }),
+    );
   });
 });

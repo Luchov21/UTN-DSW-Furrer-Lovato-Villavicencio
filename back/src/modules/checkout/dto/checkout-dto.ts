@@ -31,6 +31,16 @@ export class CheckoutDto {
   @IsNotEmpty()
   cardToken?: string;
 
+  @ValidateIf((dto: CheckoutDto) => !dto.useSavedCard)
+  @IsString()
+  @IsNotEmpty()
+  paymentMethodId?: string;
+
+  @ValidateIf((dto: CheckoutDto) => !dto.useSavedCard)
+  @IsString()
+  @IsNotEmpty()
+  paymentTypeId?: string;
+
   @IsBoolean()
   @IsOptional()
   useSavedCard?: boolean;

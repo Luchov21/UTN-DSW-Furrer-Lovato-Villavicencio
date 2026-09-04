@@ -172,6 +172,9 @@ export interface MpPaymentResult {
     id: string;
     lastFourDigits?: string;
     paymentMethodId?: string;
+    /** `credit_card`/`debit_card` — from the request, echoed back here so
+     * `rememberCard` can save it onto the new SavedCard row. */
+    paymentTypeId?: string;
     expirationMonth?: number;
     expirationYear?: number;
   };
@@ -554,6 +557,7 @@ export class MercadoPagoClient {
             id: savedCard.id,
             lastFourDigits: savedCard.lastFourDigits,
             paymentMethodId: savedCard.paymentMethodId,
+            paymentTypeId: input.paymentTypeId,
             expirationMonth: savedCard.expirationMonth,
             expirationYear: savedCard.expirationYear,
           };

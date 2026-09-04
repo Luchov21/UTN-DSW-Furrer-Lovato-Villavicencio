@@ -17,6 +17,8 @@ describe('CheckoutController', () => {
     planId: 12,
     months: 1,
     cardToken: 'tok_abc',
+    paymentMethodId: 'visa',
+    paymentTypeId: 'credit_card',
     acceptedTerms: true,
   };
 

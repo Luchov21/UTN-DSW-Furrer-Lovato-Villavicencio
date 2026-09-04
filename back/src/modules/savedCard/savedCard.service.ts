@@ -121,11 +121,12 @@ export class SavedCardService {
       paymentMethodId: mpCard.paymentMethodId,
       expirationMonth: mpCard.expirationMonth,
       expirationYear: mpCard.expirationYear,
-      // The classic Customers API's card-creation response carries no
-      // credit/debit type. A card saved through this path is not chargeable
-      // by the renewal cron until the member goes through checkout's
-      // save-card flow instead (Task 9), which does capture it.
-      paymentTypeId: null,
+      // The classic Customers API's card-creation response DOES carry the
+      // credit/debit type, nested under payment_method — mapped by
+      // MercadoPagoClient.saveCard. Falls back to null only if Mercado Pago
+      // genuinely omits it, since `isChargeable` treats a null paymentTypeId
+      // as "not chargeable" rather than crashing on it.
+      paymentTypeId: mpCard.paymentTypeId ?? null,
     });
   }
 

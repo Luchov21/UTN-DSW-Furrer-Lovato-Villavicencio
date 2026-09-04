@@ -100,6 +100,54 @@ describe('SavedCardService.saveForUser', () => {
     );
   });
 
+  it("reads paymentTypeId from Mercado Pago's response instead of hardcoding null", async () => {
+    // The classic Customers API DOES return payment_method.payment_type_id —
+    // MercadoPagoClient.saveCard maps it onto MpSavedCard.paymentTypeId, and
+    // this must be persisted, not discarded. Otherwise a card saved through
+    // this dashboard "replace card" flow is permanently unchargeable by
+    // isChargeable, even when it deactivated a working, chargeable card.
+    mercadoPagoClient = {
+      findOrCreateCustomer: jest.fn().mockResolvedValue({ id: 'cust-1' }),
+      saveCard: jest.fn().mockResolvedValue({
+        id: 'card-1',
+        lastFourDigits: '1234',
+        paymentMethodId: 'visa',
+        paymentTypeId: 'credit_card',
+        expirationMonth: 12,
+        expirationYear: 2030,
+      }),
+    };
+    await buildService();
+
+    await service.saveForUser(7, 'member@example.com', 'tok-1');
+
+    expect(manager.create).toHaveBeenCalledWith(
+      SavedCard,
+      expect.objectContaining({ paymentTypeId: 'credit_card' }),
+    );
+  });
+
+  it('falls back to null when Mercado Pago genuinely omits the payment type', async () => {
+    mercadoPagoClient = {
+      findOrCreateCustomer: jest.fn().mockResolvedValue({ id: 'cust-1' }),
+      saveCard: jest.fn().mockResolvedValue({
+        id: 'card-1',
+        lastFourDigits: '1234',
+        paymentMethodId: 'visa',
+        expirationMonth: 12,
+        expirationYear: 2030,
+      }),
+    };
+    await buildService();
+
+    await service.saveForUser(7, 'member@example.com', 'tok-1');
+
+    expect(manager.create).toHaveBeenCalledWith(
+      SavedCard,
+      expect.objectContaining({ paymentTypeId: null }),
+    );
+  });
+
   it('refuses to save a card when Mercado Pago omits card details', async () => {
     // A malformed success response — id present, everything else missing —
     // must not silently write a half-populated row.
@@ -141,7 +189,9 @@ describe('SavedCardService.saveFromApprovedPayment', () => {
     };
     savedCardRepository = {
       manager: {
-        transaction: jest.fn((cb: (manager: unknown) => unknown) => cb(manager)),
+        transaction: jest.fn((cb: (manager: unknown) => unknown) =>
+          cb(manager),
+        ),
       },
     };
     mercadoPagoClient = {

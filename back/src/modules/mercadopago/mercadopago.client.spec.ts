@@ -29,6 +29,7 @@ interface OrderLike {
 }
 
 const orderCreate = jest.fn<Promise<OrderLike>, [OrderCreateArgs]>();
+let orderRefund: jest.Mock;
 
 interface CardTokenCreateArgs {
   body: { card_id: string; customer_id: string };
@@ -51,6 +52,7 @@ jest.mock('mercadopago', () => ({
     create: orderCreate,
     get: jest.fn(),
     cancel: jest.fn(),
+    refund: orderRefund,
   })),
 }));
 
@@ -465,6 +467,44 @@ describe('MercadoPagoClient', () => {
       await expect(client.getCard('cus_1', 'card_9')).rejects.toBeInstanceOf(
         MercadoPagoUnavailableError,
       );
+    });
+  });
+
+  describe('MercadoPagoClient.refundOrder', () => {
+    beforeEach(() => {
+      orderRefund = jest.fn();
+    });
+
+    it('issues a partial refund for one transaction', async () => {
+      orderRefund.mockResolvedValue({
+        id: 'ORD01',
+        status: 'processed',
+        status_detail: 'partially_refunded',
+      });
+
+      const result = await client.refundOrder(
+        'ORD01',
+        'PAY01',
+        7000,
+        'refund-55',
+      );
+
+      expect(orderRefund).toHaveBeenCalledWith({
+        id: 'ORD01',
+        body: { transactions: [{ id: 'PAY01', amount: '7000.00' }] },
+        requestOptions: { idempotencyKey: 'refund-55' },
+      });
+      expect(result).toEqual(
+        expect.objectContaining({ id: 'ORD01', status: 'processed' }),
+      );
+    });
+
+    it('wraps an SDK failure as MercadoPagoUnavailableError', async () => {
+      orderRefund.mockRejectedValue(new Error('refund_amount_exceeds'));
+
+      await expect(
+        client.refundOrder('ORD01', 'PAY01', 7000, 'refund-55'),
+      ).rejects.toBeInstanceOf(MercadoPagoUnavailableError);
     });
   });
 });

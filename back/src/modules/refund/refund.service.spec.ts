@@ -13,7 +13,7 @@ describe('RefundService', () => {
     findSubscription: jest.Mock;
     save: jest.Mock;
   };
-  let mercadoPagoClient: { refundPayment: jest.Mock };
+  let mercadoPagoClient: { refundPayment: jest.Mock; refundOrder: jest.Mock };
   let mailService: { sendRefundConfirmation: jest.Mock };
   let service: RefundService;
 
@@ -40,6 +40,7 @@ describe('RefundService', () => {
     monthlyPriceAtPurchase: 10000,
     state: PaymentState.COMPLETED,
     mpPaymentId: null as string | null,
+    mpOrderId: null as string | null,
     refundedAt: null as Date | null,
     refundedAmount: null as number | null,
     refundedById: null as number | null,
@@ -68,6 +69,7 @@ describe('RefundService', () => {
       refundPayment: jest
         .fn()
         .mockResolvedValue({ id: 'mp-refund-1', status: 'approved' }),
+      refundOrder: jest.fn(),
     };
     mailService = {
       sendRefundConfirmation: jest.fn().mockResolvedValue(undefined),
@@ -185,6 +187,28 @@ describe('RefundService', () => {
         }),
       );
       expect(result.state).toBe(PaymentState.REFUNDED);
+    });
+
+    it('refunds through the Orders API when the payment carries an mpOrderId', async () => {
+      subscriptionService.findSubscription.mockResolvedValue(
+        buildSubscription(),
+      );
+      paymentService.findCurrentTermPayment.mockResolvedValue(
+        buildPayment({ mpPaymentId: 'PAY01', mpOrderId: 'ORD01' }),
+      );
+      mercadoPagoClient.refundOrder = jest
+        .fn()
+        .mockResolvedValue({ id: 'ORD01', status: 'processed' });
+
+      await service.issue(7, 900);
+
+      expect(mercadoPagoClient.refundOrder).toHaveBeenCalledWith(
+        'ORD01',
+        'PAY01',
+        70000,
+        'refund-55',
+      );
+      expect(mercadoPagoClient.refundPayment).not.toHaveBeenCalled();
     });
 
     it('makes no MP call for a cash payment', async () => {

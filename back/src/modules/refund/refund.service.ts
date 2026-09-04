@@ -72,11 +72,29 @@ export class RefundService {
       // propagate) on any failure — see mercadopago.client.ts. Nothing below
       // this line executes when it throws: that is the entire point of
       // calling it before any local write.
-      await this.mercadoPagoClient.refundPayment(
-        payment.mpPaymentId,
-        amount,
-        `refund-${payment.id}`,
-      );
+      //
+      // mpOrderId decides which endpoint the refund needs: a payment from
+      // chargeCardToken/chargeSavedCard (Orders API) only refunds through
+      // POST /v1/orders/{order_id}/refund, keyed on the order id with the
+      // transaction id in the body — the classic
+      // POST /v1/payments/{id}/refunds refundPayment uses rejects an Orders
+      // API transaction id. A payment with no mpOrderId (Point/QR, or a
+      // payment predating this migration) keeps using refundPayment exactly
+      // as before.
+      if (payment.mpOrderId) {
+        await this.mercadoPagoClient.refundOrder(
+          payment.mpOrderId,
+          payment.mpPaymentId,
+          amount,
+          `refund-${payment.id}`,
+        );
+      } else {
+        await this.mercadoPagoClient.refundPayment(
+          payment.mpPaymentId,
+          amount,
+          `refund-${payment.id}`,
+        );
+      }
     }
 
     // Only reached once the money has actually moved (or didn't need to).

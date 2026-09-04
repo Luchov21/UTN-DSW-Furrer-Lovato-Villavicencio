@@ -674,6 +674,42 @@ export class MercadoPagoClient {
     }
   }
 
+  /**
+   * Refunds one transaction within an Orders API order — the only refund
+   * path that works for a payment created by `chargeCardToken`/
+   * `chargeSavedCard` (see `RefundService.issue`); the classic
+   * `POST /v1/payments/{id}/refunds` endpoint `refundPayment` uses does not
+   * accept an Orders API transaction id.
+   */
+  async refundOrder(
+    orderId: string,
+    transactionId: string,
+    amount: number,
+    idempotencyKey: string,
+  ): Promise<MpRefundResult> {
+    const sdkConfig = this.getSdkConfig();
+    try {
+      const orderClient = new Order(sdkConfig);
+      const order = await orderClient.refund({
+        id: orderId,
+        body: {
+          transactions: [{ id: transactionId, amount: amount.toFixed(2) }],
+        },
+        requestOptions: { idempotencyKey },
+      });
+      if (!order.id) {
+        throw new Error('Mercado Pago did not return an order id.');
+      }
+      return {
+        id: order.id,
+        status: order.status,
+        amount,
+      };
+    } catch (err) {
+      throw this.wrapError('refundOrder', err);
+    }
+  }
+
   async createOrder(request: CreateOrderRequest): Promise<MpOrderResult> {
     const sdkConfig = this.getSdkConfig();
     try {

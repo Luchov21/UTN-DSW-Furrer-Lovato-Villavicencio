@@ -20,6 +20,36 @@ import { MercadoPagoConfig } from './mercadopago.config';
 export const QR_MODE_HYBRID = 'hybrid';
 
 /**
+ * Translates an Orders API order/transaction status into the classic
+ * Payments API status vocabulary every caller of `MpPaymentResult` already
+ * branches on (`approved`/`rejected`/`in_process`). `webhook.service.ts`'s
+ * `fetchPaymentLike` and `MercadoPagoClient`'s own online-order charging both
+ * use this — a synchronous charge and a later webhook retry for the same
+ * order must always compute the same status, or the idempotency check in
+ * `WebhookService.handleNotification` (keyed on the resulting `mpPaymentId`)
+ * can't recognize them as the same thing.
+ */
+export function mapOrderStatusToPaymentStatus(
+  status: string | undefined,
+): string | undefined {
+  switch (status) {
+    case 'processed':
+      return 'approved';
+    case 'failed':
+      return 'rejected';
+    case 'processing':
+    case 'action_required':
+      return 'in_process';
+    case 'canceled':
+      return 'cancelled';
+    default:
+      // 'refunded', 'charged_back', 'created', or anything future — passed
+      // through as-is. Neither current caller branches on these today.
+      return status;
+  }
+}
+
+/**
  * Thrown by every `MercadoPagoClient` method when the SDK call could not be
  * completed for any reason: a network failure, a 4xx/5xx response from
  * Mercado Pago, a malformed success response, or the client being called
@@ -103,6 +133,13 @@ export interface MpPaymentResult {
    * external_reference on that call yet.
    */
   externalReference?: string;
+  /**
+   * The Orders API order id this payment belongs to, when it originated from
+   * one (an online checkout charge or a renewal). `undefined` for a payment
+   * that went through the classic Payments API. `RefundService` uses this to
+   * decide which refund endpoint a payment needs.
+   */
+  mpOrderId?: string;
   /**
    * The card this payment was made with, as Mercado Pago echoes it back on
    * the payment itself. When the charge was scoped to a customer, `id` is

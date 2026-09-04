@@ -2,6 +2,7 @@ import { MercadoPagoConfig } from './mercadopago.config';
 import {
   MercadoPagoClient,
   MercadoPagoUnavailableError,
+  mapOrderStatusToPaymentStatus,
 } from './mercadopago.client';
 
 // The SDK's client classes (Payment, Customer, ...) are constructed fresh
@@ -50,6 +51,32 @@ const ENABLED_ENV = {
   MP_PUBLIC_KEY: 'fake-public-key-for-tests',
   MP_WEBHOOK_SECRET: 'secret',
 };
+
+describe('mapOrderStatusToPaymentStatus', () => {
+  it('maps an approved order to approved', () => {
+    expect(mapOrderStatusToPaymentStatus('processed')).toBe('approved');
+  });
+
+  it('maps a failed order to rejected', () => {
+    expect(mapOrderStatusToPaymentStatus('failed')).toBe('rejected');
+  });
+
+  it('maps processing and action_required to in_process', () => {
+    expect(mapOrderStatusToPaymentStatus('processing')).toBe('in_process');
+    expect(mapOrderStatusToPaymentStatus('action_required')).toBe('in_process');
+  });
+
+  it('maps canceled to cancelled', () => {
+    expect(mapOrderStatusToPaymentStatus('canceled')).toBe('cancelled');
+  });
+
+  it('passes refunded, charged_back, created and unknown values through as-is', () => {
+    expect(mapOrderStatusToPaymentStatus('refunded')).toBe('refunded');
+    expect(mapOrderStatusToPaymentStatus('charged_back')).toBe('charged_back');
+    expect(mapOrderStatusToPaymentStatus('created')).toBe('created');
+    expect(mapOrderStatusToPaymentStatus(undefined)).toBeUndefined();
+  });
+});
 
 describe('MercadoPagoClient', () => {
   let client: MercadoPagoClient;

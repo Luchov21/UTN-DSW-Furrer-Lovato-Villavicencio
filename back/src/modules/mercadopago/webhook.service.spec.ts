@@ -352,6 +352,49 @@ describe('WebhookService.handleNotification', () => {
       expect(orderResolver.resolve).not.toHaveBeenCalled();
       expect(paymentService.confirmPlanCharge).not.toHaveBeenCalled();
     });
+
+    it('carries the order id through as mpOrderId', async () => {
+      client.getOrder.mockResolvedValue({
+        id: 'ORD01',
+        status: 'processed',
+        statusDetail: 'accredited',
+        externalReference: 'order-1',
+        totalPaidAmount: 14000,
+        paymentId: 'mp-order-pay-1',
+      });
+      orderResolver.resolve.mockResolvedValue({
+        userId: 3,
+        planId: 12,
+        termMonths: 1,
+        amount: 14000,
+        payMethod: 'qr',
+      });
+      paymentService.findByMpPaymentId.mockResolvedValue(null);
+      paymentService.confirmPlanCharge.mockResolvedValue({
+        payment: { id: 90 },
+        subscription: { id: 44, endDate: '2026-10-02', user: {}, plan: {} },
+      });
+
+      await service.handleNotification('ORD01', 'order');
+
+      expect(paymentService.confirmPlanCharge).toHaveBeenCalledWith(
+        expect.objectContaining({ mpOrderId: 'ORD01' }),
+      );
+    });
+
+    it('maps a failed order to rejected (does not record a payment)', async () => {
+      client.getOrder.mockResolvedValue({
+        id: 'ORD04',
+        status: 'failed',
+        statusDetail: 'cc_rejected_other_reason',
+        externalReference: 'order-1',
+        paymentId: 'mp-order-pay-4',
+      });
+
+      await service.handleNotification('ORD04', 'order');
+
+      expect(paymentService.confirmPlanCharge).not.toHaveBeenCalled();
+    });
   });
 
   it('answers 200 and writes nothing for an unhandled notification topic', async () => {

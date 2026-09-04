@@ -9,6 +9,7 @@ export class MercadoPagoConfig {
   private readonly _webhookSecret?: string;
   private readonly _pointTerminalId?: string;
   private readonly _qrExternalPosId?: string;
+  private readonly _frontendUrl: string;
 
   constructor(config: ConfigService) {
     this._enabled = config.get<string>('MP_ENABLED') === 'true';
@@ -39,6 +40,13 @@ export class MercadoPagoConfig {
     // Optional fields
     this._pointTerminalId = config.get<string>('MP_POINT_TERMINAL_ID');
     this._qrExternalPosId = config.get<string>('MP_QR_EXTERNAL_POS_ID');
+
+    // The public origin a member's browser can reach. Already the source of
+    // truth for CORS (main.ts) and for the links in transactional mail
+    // (mail.service.ts); back_urls is the third consumer, so it reads it from
+    // here rather than adding another scattered process.env access.
+    this._frontendUrl =
+      config.get<string>('FRONTEND_URL') ?? 'http://localhost:5173';
   }
 
   get enabled(): boolean {
@@ -63,5 +71,9 @@ export class MercadoPagoConfig {
 
   get qrExternalPosId(): string | undefined {
     return this._qrExternalPosId;
+  }
+
+  get frontendUrl(): string {
+    return this._frontendUrl;
   }
 }

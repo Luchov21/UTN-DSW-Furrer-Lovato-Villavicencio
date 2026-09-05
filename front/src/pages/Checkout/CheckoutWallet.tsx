@@ -34,9 +34,20 @@ function CheckoutWallet() {
   const navigate = useNavigate();
   const location = useLocation();
   const { planId, months } = readCheckoutParams(location.search);
+  // Identifies which (planId, months) pair the page is currently showing
+  // data for. Compared against `loadedFor` below to derive `isLoading` — see
+  // that comparison for why this can't just be a manually toggled boolean.
+  const requestKey = `${planId}:${months}`;
 
   const [summary, setSummary] = useState<CheckoutSummary | null>(null);
-  const [preference, setPreference] = useState<CheckoutPreference | null>(
+  const [preference, setPreference] = useState<CheckoutPreference | null>(null);
+  // The `months` the currently-loaded preference was actually created for —
+  // set in the same effect run as `preference`, never derived from the live
+  // `months` param. handleWalletSubmit compares this against the current
+  // `months` to detect a duration change that outran the reload it triggers
+  // (see isLoading below): without this, arming would send the CURRENT
+  // months alongside an externalReference priced for the OLD one.
+  const [preferenceForMonths, setPreferenceForMonths] = useState<number | null>(
     null,
   );
   const [card, setCard] = useState<SavedCard | null>(null);
@@ -44,7 +55,19 @@ function CheckoutWallet() {
   const [acceptedTerms, setAcceptedTerms] = useState(false);
   const [acceptedRules, setAcceptedRules] = useState(false);
   const [saveCard, setSaveCard] = useState(false);
-  const [isLoading, setIsLoading] = useState(true);
+  // The (planId, months) pair the currently-held summary/card/preference were
+  // loaded for, set once the load effect's fetches for that pair land. `null`
+  // until the first load finishes.
+  const [loadedFor, setLoadedFor] = useState<string | null>(null);
+  // Derived, not a separately-toggled state: a duration change updates
+  // `requestKey` (from the URL) synchronously, before the load effect's
+  // refetch resolves, so comparing the two is what makes the page fall back
+  // to the loading UI — hiding the Brick — for the entire reload window
+  // rather than only for the very first load. A manually-toggled boolean
+  // reset to `true` at the top of the effect would do the same thing, but
+  // React's set-state-in-effect lint rule flags a synchronous setState in an
+  // effect body, and there is no async gap to hide it behind here.
+  const isLoading = loadedFor !== requestKey;
   const [isPaying, setIsPaying] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Drives PaymentSuccess when approved, DeclineBanner otherwise.
@@ -97,6 +120,7 @@ function CheckoutWallet() {
 
         if (preferenceRes.status === 'fulfilled') {
           setPreference(preferenceRes.value);
+          setPreferenceForMonths(months);
         } else {
           // Not fatal, and deliberately not surfaced as an error: the Brick
           // renders cards only without a preferenceId, so the member can
@@ -107,10 +131,16 @@ function CheckoutWallet() {
             preferenceRes.reason,
           );
           setPreference(null);
+          setPreferenceForMonths(null);
         }
       })
-      .finally(() => setIsLoading(false));
-  }, [planId, months, navigate]);
+      // Marks THIS run's (planId, months) as loaded, not just "loading over".
+      // A duration change updates `requestKey` synchronously (see above) and
+      // re-runs this effect; until this line's `requestKey` — captured by
+      // this closure at the top of this render — reaches `loadedFor`,
+      // `isLoading` stays true and the Brick stays hidden.
+      .finally(() => setLoadedFor(requestKey));
+  }, [planId, months, navigate, requestKey]);
 
   const pay = useCallback(
     async (card?: {
@@ -182,15 +212,19 @@ function CheckoutWallet() {
     if (!planId || !preference || !summary) {
       throw new Error('No se pudo iniciar el pago con Mercado Pago.');
     }
-    // Guards against the window opened by a duration change: navigating to a
-    // new `months` re-triggers the load effect, but the OLD summary/preference
-    // stay rendered (and the Brick's remount key stays stale) until the
-    // refetches land. Arming against a preference priced for a different
-    // amount than the current summary would create a ChargeOrder for the new
-    // term while Mercado Pago still charges the old preference's amount — the
-    // webhook's amount guard then refuses it, leaving the member charged with
-    // nothing recorded. Refuse to arm rather than risk that.
-    if (Number(preference.amount) !== Number(summary.total)) {
+    // Safety net for the window opened by a duration change: navigating to a
+    // new `months` re-triggers the load effect (see isLoading there), which
+    // is what actually keeps the Brick from rendering against stale data.
+    // This check exists in case that gate has a gap this file's author
+    // didn't anticipate — e.g. a state-batching edge case where the Brick
+    // fires onWalletSubmit before isLoading flips. `preferenceForMonths` is
+    // the `months` this preference (and its externalReference) was actually
+    // created for; comparing it against the CURRENT `months` — the value
+    // about to be sent to armCheckout — catches exactly the race the bug
+    // report describes. `preference.amount === summary.total` would not:
+    // both are always set together from the same (planId, months) pair, so
+    // they can never disagree with each other.
+    if (preferenceForMonths !== months) {
       const message = 'Esperá un momento y volvé a intentar el pago.';
       setError(message);
       throw new Error(message);
@@ -208,7 +242,7 @@ function CheckoutWallet() {
       setError(message);
       throw err;
     }
-  }, [planId, months, preference, summary]);
+  }, [planId, months, preference, summary, preferenceForMonths]);
 
   if (result?.status === 'approved') {
     return (
@@ -256,8 +290,9 @@ function CheckoutWallet() {
               disabled={isPaying}
             />
 
-            {!useSavedCard && summary && (
-              termsAccepted ? (
+            {!useSavedCard &&
+              summary &&
+              (termsAccepted ? (
                 <PaymentForm
                   // Remounts when the price or the preference changes: a Brick
                   // left mounted across a duration switch would tokenize
@@ -275,8 +310,7 @@ function CheckoutWallet() {
                   Aceptá los Términos y Condiciones y el Reglamento de Uso para
                   elegir cómo querés pagar.
                 </div>
-              )
-            )}
+              ))}
 
             <TermsAcceptance
               acceptedTerms={acceptedTerms}

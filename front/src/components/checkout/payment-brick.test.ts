@@ -22,6 +22,24 @@ describe('classifySubmission', () => {
     });
   });
 
+  // The Payment Brick that actually calls classifySubmission reports
+  // selectedPaymentMethod in camelCase (TPaymentBrickPaymentType, per
+  // payment/type.d.ts), not the snake_case vocabulary above — see
+  // CARD_METHOD_TYPE_IDS' comment in payment-brick.ts. Without this case,
+  // the 6 hand-written snake_case strings above pass regardless of which
+  // casing the real Brick emits. The expected paymentTypeId is still
+  // snake_case: this function's contract is to always return Mercado
+  // Pago's own payment_type_id vocabulary, no matter which casing
+  // selectedPaymentMethod arrived in.
+  it('routes a camelCase credit card (the real Payment Brick vocabulary) to a card charge', () => {
+    expect(classifySubmission('creditCard', cardForm, undefined)).toEqual({
+      kind: 'card',
+      token: 'tok_1',
+      paymentMethodId: 'visa',
+      paymentTypeId: 'credit_card',
+    });
+  });
+
   // A2's fallback: additionalData wins when it is present, so the reading
   // that commit e2a0e88 established keeps working whatever the Brick reports
   // as selectedPaymentMethod.

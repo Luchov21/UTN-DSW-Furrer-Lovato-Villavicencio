@@ -114,10 +114,23 @@ function CheckoutReturn() {
           Estamos confirmando tu pago
         </h2>
         <p className="mt-2 font-body text-sm text-text-muted">
-          Mercado Pago todavía no nos avisó el resultado. Apenas se acredite
-          vas a recibir el comprobante por email y tu plan queda activo — no
-          hace falta que vuelvas a pagar.
+          Mercado Pago todavía no nos avisó el resultado — puede estar
+          pendiente, o puede que no se haya acreditado. Si se aprueba, vas a
+          recibir el comprobante por email y tu plan se activa
+          automáticamente, sin que tengas que hacer nada más.
         </p>
+        <p className="mt-2 font-body text-sm text-text-muted">
+          Podés revisar el estado de tu plan cuando quieras, o volver a
+          intentar el pago si no se acredita.
+        </p>
+        <div className="mt-4 flex flex-col gap-3 sm:flex-row">
+          <Button href="/membership" variant="secondary" className="w-full">
+            Ver estado de mi plan
+          </Button>
+          <Button href={checkoutWalletUrl(null, 1)} className="w-full">
+            Volver a intentar
+          </Button>
+        </div>
       </Card>
     </CheckoutLayout>
   );

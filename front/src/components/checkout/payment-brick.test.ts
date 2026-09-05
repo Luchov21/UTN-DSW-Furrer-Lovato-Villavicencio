@@ -56,6 +56,23 @@ describe('classifySubmission', () => {
     });
   });
 
+  // additionalData.paymentTypeId is typed as a bare string by the SDK, with
+  // no casing guarantee — it must go through the same CARD_METHOD_TYPE_IDS
+  // normalization as the selectedPaymentMethod fallback, or a camelCase value
+  // here would reach the backend unnormalized.
+  it('normalizes a camelCase additionalData.paymentTypeId', () => {
+    expect(
+      classifySubmission('credit_card', cardForm, {
+        paymentTypeId: 'creditCard',
+      }),
+    ).toEqual({
+      kind: 'card',
+      token: 'tok_1',
+      paymentMethodId: 'visa',
+      paymentTypeId: 'credit_card',
+    });
+  });
+
   it('routes the Mercado Pago wallet to a redirect', () => {
     expect(classifySubmission('wallet_purchase', {}, undefined)).toEqual({
       kind: 'wallet',

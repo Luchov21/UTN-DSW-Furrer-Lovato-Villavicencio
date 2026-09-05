@@ -179,8 +179,21 @@ function CheckoutWallet() {
   // redirect: Mercado Pago must never be able to charge against a reference
   // nothing on our side resolves.
   const handleWalletSubmit = useCallback(async () => {
-    if (!planId || !preference) {
+    if (!planId || !preference || !summary) {
       throw new Error('No se pudo iniciar el pago con Mercado Pago.');
+    }
+    // Guards against the window opened by a duration change: navigating to a
+    // new `months` re-triggers the load effect, but the OLD summary/preference
+    // stay rendered (and the Brick's remount key stays stale) until the
+    // refetches land. Arming against a preference priced for a different
+    // amount than the current summary would create a ChargeOrder for the new
+    // term while Mercado Pago still charges the old preference's amount — the
+    // webhook's amount guard then refuses it, leaving the member charged with
+    // nothing recorded. Refuse to arm rather than risk that.
+    if (Number(preference.amount) !== Number(summary.total)) {
+      const message = 'Esperá un momento y volvé a intentar el pago.';
+      setError(message);
+      throw new Error(message);
     }
     setError(null);
     try {
@@ -195,7 +208,7 @@ function CheckoutWallet() {
       setError(message);
       throw err;
     }
-  }, [planId, months, preference]);
+  }, [planId, months, preference, summary]);
 
   if (result?.status === 'approved') {
     return (

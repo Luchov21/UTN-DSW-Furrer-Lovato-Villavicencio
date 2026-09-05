@@ -263,6 +263,7 @@ const RegisterForm = ({
         label="Registrarse con Google"
         disabled={isLoading}
         onError={(errMsg) => setError(errMsg)}
+        onSuccess={onSuccess}
         onIncompleteProfile={onIncompleteProfile}
       />
 

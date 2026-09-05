@@ -189,6 +189,7 @@ const LoginForm = ({ onSuccess, onIncompleteProfile }: LoginFormProps) => {
         label="Continuar con Google"
         disabled={isLoading}
         onError={(errMsg) => setError(errMsg)}
+        onSuccess={onSuccess}
         onIncompleteProfile={onIncompleteProfile}
       />
 

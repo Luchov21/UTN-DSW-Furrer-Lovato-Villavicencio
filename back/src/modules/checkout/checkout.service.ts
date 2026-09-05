@@ -101,9 +101,16 @@ export class CheckoutService {
     } catch (error) {
       if (error instanceof MercadoPagoUnavailableError) {
         // Nothing was armed and nothing was charged, so this is safe to
-        // report as a plain outage. The wallet page degrades to cards only.
+        // report as a plain outage. The wallet page degrades to cards only —
+        // silently on the member's side, but logged here so the failure
+        // still leaves a server-side trace.
+        this.logger.warn(
+          `Could not create the Mercado Pago preference for user ${userId}`,
+          error instanceof Error ? error.stack : error,
+        );
         throw new ServiceUnavailableException(
           'No pudimos preparar el pago con Mercado Pago. Podés pagar con tarjeta.',
+          { cause: error },
         );
       }
       throw error;

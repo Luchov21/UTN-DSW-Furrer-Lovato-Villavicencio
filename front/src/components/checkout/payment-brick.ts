@@ -79,9 +79,16 @@ export function classifySubmission(
     };
   }
 
-  const paymentTypeId =
-    additionalData?.paymentTypeId ??
-    CARD_METHOD_TYPE_IDS[selectedPaymentMethod];
+  // additionalData.paymentTypeId is typed by the SDK as a bare, casing-
+  // unguaranteed string — the same normalization CARD_METHOD_TYPE_IDS applies
+  // to the selectedPaymentMethod fallback must also apply here, or a Brick
+  // that ever reports it as e.g. 'creditCard' would send that unnormalized
+  // value straight through to the backend and MP's Orders API. The map is
+  // keyed by both casings for every known card method, so an already-correct
+  // snake_case value maps to itself, and anything unrecognized passes through
+  // unchanged rather than becoming undefined.
+  const rawTypeId = additionalData?.paymentTypeId ?? selectedPaymentMethod;
+  const paymentTypeId = CARD_METHOD_TYPE_IDS[rawTypeId] ?? rawTypeId;
 
   if (!formData.token || !formData.payment_method_id) {
     return {

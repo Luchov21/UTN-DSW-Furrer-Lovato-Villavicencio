@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { Loader2 } from 'lucide-react';
 import CheckoutLayout from '../../components/checkout/CheckoutLayout';
-import CardForm from '../../components/checkout/CardForm';
+import PaymentForm from '../../components/checkout/PaymentForm';
 import DurationSelector from '../../components/checkout/DurationSelector';
 import PaymentMethodChoice from '../../components/checkout/PaymentMethodChoice';
 import TermsAcceptance from '../../components/checkout/TermsAcceptance';
@@ -16,12 +16,18 @@ import {
   readCheckoutParams,
 } from '../../components/checkout/useCheckoutParams';
 import {
+  armCheckout,
+  createCheckoutPreference,
   getCheckoutSummary,
   submitCheckout,
 } from '../../services/checkout.service';
 import { getMySavedCard } from '../../services/savedCard.service';
 import { formatPriceDisplay } from '../../lib/currency';
-import type { CheckoutResult, CheckoutSummary } from '../../types/checkout';
+import type {
+  CheckoutPreference,
+  CheckoutResult,
+  CheckoutSummary,
+} from '../../types/checkout';
 import type { SavedCard } from '../../types/savedCard';
 
 function CheckoutWallet() {
@@ -30,6 +36,9 @@ function CheckoutWallet() {
   const { planId, months } = readCheckoutParams(location.search);
 
   const [summary, setSummary] = useState<CheckoutSummary | null>(null);
+  const [preference, setPreference] = useState<CheckoutPreference | null>(
+    null,
+  );
   const [card, setCard] = useState<SavedCard | null>(null);
   const [useSavedCard, setUseSavedCard] = useState(false);
   const [acceptedTerms, setAcceptedTerms] = useState(false);
@@ -61,8 +70,12 @@ function CheckoutWallet() {
       navigate('/membership', { replace: true });
       return;
     }
-    Promise.allSettled([getCheckoutSummary(planId, months), getMySavedCard()])
-      .then(([summaryRes, cardRes]) => {
+    Promise.allSettled([
+      getCheckoutSummary(planId, months),
+      getMySavedCard(),
+      createCheckoutPreference(planId, months),
+    ])
+      .then(([summaryRes, cardRes, preferenceRes]) => {
         if (summaryRes.status === 'fulfilled') {
           setSummary(summaryRes.value);
         } else {
@@ -81,6 +94,20 @@ function CheckoutWallet() {
         const savedCard = cardRes.status === 'fulfilled' ? cardRes.value : null;
         setCard(savedCard);
         setUseSavedCard(Boolean(savedCard));
+
+        if (preferenceRes.status === 'fulfilled') {
+          setPreference(preferenceRes.value);
+        } else {
+          // Not fatal, and deliberately not surfaced as an error: the Brick
+          // renders cards only without a preferenceId, so the member can
+          // still pay. An error banner would explain a missing option they
+          // may never have wanted.
+          console.warn(
+            'Could not create the Mercado Pago preference',
+            preferenceRes.reason,
+          );
+          setPreference(null);
+        }
       })
       .finally(() => setIsLoading(false));
   }, [planId, months, navigate]);
@@ -148,6 +175,28 @@ function CheckoutWallet() {
     navigate(checkoutWalletUrl(planId, nextMonths), { replace: true });
   };
 
+  // Arms the charge order, then lets the Brick redirect. Rejecting stops the
+  // redirect: Mercado Pago must never be able to charge against a reference
+  // nothing on our side resolves.
+  const handleWalletSubmit = useCallback(async () => {
+    if (!planId || !preference) {
+      throw new Error('No se pudo iniciar el pago con Mercado Pago.');
+    }
+    setError(null);
+    try {
+      await armCheckout({
+        planId,
+        months,
+        externalReference: preference.externalReference,
+      });
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : 'No se pudo iniciar el pago.';
+      setError(message);
+      throw err;
+    }
+  }, [planId, months, preference]);
+
   if (result?.status === 'approved') {
     return (
       <CheckoutLayout
@@ -194,21 +243,27 @@ function CheckoutWallet() {
               disabled={isPaying}
             />
 
-            {!useSavedCard &&
-              summary &&
-              (termsAccepted ? (
-                <CardForm
+            {!useSavedCard && summary && (
+              termsAccepted ? (
+                <PaymentForm
+                  // Remounts when the price or the preference changes: a Brick
+                  // left mounted across a duration switch would tokenize
+                  // against the amount it was initialized with.
+                  key={`${summary.total}-${preference?.preferenceId ?? 'cards'}`}
                   amount={summary.total}
-                  onToken={(card) => void pay(card)}
+                  preferenceId={preference?.preferenceId}
+                  onCardToken={(card) => void pay(card)}
+                  onWalletSubmit={handleWalletSubmit}
                   onError={setError}
                   isBusy={isPaying}
                 />
               ) : (
                 <div className="rounded-xl border border-dashed border-border p-4 text-center text-sm text-text-muted">
                   Aceptá los Términos y Condiciones y el Reglamento de Uso para
-                  ingresar los datos de tu tarjeta.
+                  elegir cómo querés pagar.
                 </div>
-              ))}
+              )
+            )}
 
             <TermsAcceptance
               acceptedTerms={acceptedTerms}

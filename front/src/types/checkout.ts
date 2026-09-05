@@ -34,3 +34,21 @@ export interface CheckoutPayload {
   saveCard?: boolean;
   acceptedTerms: true;
 }
+
+// Mirrors the response of POST /checkout/preference.
+export interface CheckoutPreference {
+  preferenceId: string;
+  externalReference: string;
+  amount: number;
+}
+
+// Mirrors CheckoutStatusResult. 'pending' means the webhook has not settled
+// the payment yet — not that it failed.
+export interface CheckoutStatus {
+  status: 'pending' | 'approved' | 'rejected';
+  paymentId?: number;
+  newEndDate?: string;
+  planName?: string;
+  amount?: number;
+  months?: number;
+}

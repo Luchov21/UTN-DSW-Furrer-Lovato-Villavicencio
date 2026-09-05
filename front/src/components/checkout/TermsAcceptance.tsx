@@ -81,6 +81,9 @@ const TermsAcceptance = ({
         />
         <span className="font-semibold">
           Guardar mi tarjeta para el pago automático de los próximos meses
+          <span className="ml-1 font-normal text-text-muted">
+            (solo si pagás con tarjeta)
+          </span>
         </span>
       </label>
       {/* The consequence belongs next to the checkbox, not in a tooltip and

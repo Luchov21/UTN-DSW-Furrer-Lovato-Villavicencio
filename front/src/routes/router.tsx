@@ -10,6 +10,7 @@ import Contact from '../pages/Contact/Contact';
 import Plan from '../pages/Plan/Plan';
 import Checkout from '../pages/Checkout/Checkout';
 import CheckoutWallet from '../pages/Checkout/CheckoutWallet';
+import CheckoutReturn from '../pages/Checkout/CheckoutReturn';
 import NotFound from '../pages/NotFound/NotFound';
 import Trainers from '../pages/Trainers/Trainers';
 import Dashboard from '../pages/Dashboard/Dashboard';
@@ -70,6 +71,14 @@ export const router = createBrowserRouter([
         element: (
           <ProtectedRoute>
             <CheckoutWallet />
+          </ProtectedRoute>
+        ),
+      },
+      {
+        path: '/checkout/return',
+        element: (
+          <ProtectedRoute>
+            <CheckoutReturn />
           </ProtectedRoute>
         ),
       },

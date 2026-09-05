@@ -6,9 +6,15 @@ import type { CheckoutResult } from '../../types/checkout';
 
 interface PaymentSuccessProps {
   result: CheckoutResult;
+  /**
+   * Shown after a Mercado Pago account payment, which produces no card and so
+   * cannot turn on auto-renewal. Saying nothing would leave a member who
+   * wanted it wondering why it did not happen.
+   */
+  showAddCardNudge?: boolean;
 }
 
-const PaymentSuccess = ({ result }: PaymentSuccessProps) => (
+const PaymentSuccess = ({ result, showAddCardNudge }: PaymentSuccessProps) => (
   <Card className="text-center hover:translate-y-0 hover:shadow-lg">
     {/* Drawn with stroke-dashoffset rather than a library: one animation does
         not justify a dependency. Held still for prefers-reduced-motion. */}
@@ -70,6 +76,16 @@ const PaymentSuccess = ({ result }: PaymentSuccessProps) => (
     <p className="mt-6 font-body text-sm text-text-muted">
       Te enviamos el comprobante a tu email.
     </p>
+
+    {showAddCardNudge && (
+      <p className="mt-2 font-body text-sm text-text-muted">
+        Para renovar automáticamente el mes que viene, agregá una tarjeta desde{' '}
+        <a href="/dashboard" className="font-medium text-primary hover:underline">
+          Mi plan
+        </a>
+        .
+      </p>
+    )}
 
     <div className="mt-6 flex flex-wrap justify-center gap-3">
       <Button href="/dashboard">Ir a mi panel</Button>

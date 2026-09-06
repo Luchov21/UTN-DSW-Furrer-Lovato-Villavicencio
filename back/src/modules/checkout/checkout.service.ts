@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import { PlanService } from '../plan/plan.service';
 import { PlanDurationService } from '../plan/plan-duration.service';
+import { resolveTerm } from '../plan/plan-duration.rules';
 import { ChargeOrderService } from '../chargeOrder/chargeOrder.service';
 import { buildExternalReference } from '../chargeOrder/chargeOrder.rules';
 import { ChargeOrderStatus } from '../chargeOrder/enum/chargeOrder-status.enum';
@@ -31,6 +32,17 @@ import {
   type CheckoutStatusResult,
   type CheckoutSummary,
 } from './checkout.rules';
+
+export interface ResolvedCharge {
+  amount: number;
+  planDurationId: number | null;
+  /** 0 marks a prorated plan change: it buys no months. */
+  termMonths: number;
+  /** Non-null names the subscription a prorated upgrade replaces. */
+  changeFromSubscriptionId: number | null;
+  /** Non-null makes the new subscription inherit this end date. */
+  endDateOverride: Date | null;
+}
 
 @Injectable()
 export class CheckoutService {
@@ -60,6 +72,32 @@ export class CheckoutService {
   }
 
   /**
+   * The single source of truth for what a member is about to be charged.
+   *
+   * createPreference, armOrder and pay MUST all go through this and none of
+   * them may compute an amount of their own: the Brick renders what the
+   * preference says and the member is billed what the charge says, so a second
+   * derivation is a bug that shows one price and takes another.
+   */
+  async resolveCharge(
+    userId: number,
+    dto: { planId: number; months?: number },
+  ): Promise<ResolvedCharge> {
+    const summary = await this.getSummary(dto.planId, dto.months ?? 1);
+    const plan = await this.planService.findPlan(dto.planId);
+    const durations = await this.planDurationService.findByPlan(dto.planId);
+    const term = resolveTerm(plan!, dto.months ?? 1, durations);
+
+    return {
+      amount: summary.total,
+      planDurationId: term.planDurationId,
+      termMonths: term.months,
+      changeFromSubscriptionId: null,
+      endDateOverride: null,
+    };
+  }
+
+  /**
    * The Mercado Pago preference behind the Payment Brick's wallet option.
    *
    * Creates NO ChargeOrder: this runs on every wallet-page load and on every
@@ -78,6 +116,7 @@ export class CheckoutService {
     amount: number;
   }> {
     const summary = await this.getSummary(dto.planId, dto.months);
+    const charge = await this.resolveCharge(userId, dto);
     const externalReference = buildExternalReference(
       userId,
       randomUUID().slice(0, 8),
@@ -86,7 +125,7 @@ export class CheckoutService {
     try {
       const preference = await this.mercadoPagoClient.createPreference({
         planName: summary.planName,
-        amount: summary.total,
+        amount: charge.amount,
         externalReference,
         payerEmail: email,
         frontendUrl: this.mercadoPagoConfig.frontendUrl,
@@ -96,7 +135,7 @@ export class CheckoutService {
       return {
         preferenceId: preference.id,
         externalReference,
-        amount: summary.total,
+        amount: charge.amount,
       };
     } catch (error) {
       if (error instanceof MercadoPagoUnavailableError) {
@@ -150,13 +189,13 @@ export class CheckoutService {
     // Re-priced here, never taken from the request: the browser has been away
     // to a preference and back, and D5 does not stop applying because a
     // previous endpoint already computed a price.
-    const summary = await this.getSummary(dto.planId, dto.months);
+    const charge = await this.resolveCharge(userId, dto);
 
     await this.chargeOrderService.createCharge({
       userId,
       planId: dto.planId,
       months: dto.months,
-      amount: summary.total,
+      amount: charge.amount,
       method: 'online',
       collectionPointId: null,
       adminId: null,
@@ -218,12 +257,13 @@ export class CheckoutService {
     dto: CheckoutDto,
   ): Promise<CheckoutResult> {
     const summary = await this.getSummary(dto.planId, dto.months);
+    const charge = await this.resolveCharge(userId, dto);
 
     const order = await this.chargeOrderService.createCharge({
       userId,
       planId: dto.planId,
       months: dto.months,
-      amount: summary.total,
+      amount: charge.amount,
       method: 'online',
       collectionPointId: null,
       adminId: null,
@@ -238,18 +278,20 @@ export class CheckoutService {
       if (dto.useSavedCard) {
         result = await this.chargeExistingCard(
           userId,
+          charge.amount,
           summary,
           order.externalReference,
         );
       } else {
-        const charge = await this.chargeNewCard(
+        const cardCharge = await this.chargeNewCard(
           dto,
           email,
+          charge.amount,
           summary,
           order.externalReference,
         );
-        result = charge.result;
-        customerId = charge.customerId;
+        result = cardCharge.result;
+        customerId = cardCharge.customerId;
       }
     } catch (error) {
       if (error instanceof MercadoPagoUnavailableError) {
@@ -310,6 +352,7 @@ export class CheckoutService {
         order.externalReference,
         userId,
         dto,
+        charge.amount,
         summary,
         customerId,
       );
@@ -320,7 +363,7 @@ export class CheckoutService {
       // Closing it here would make the resolver return null and throw that
       // recovery away.
       this.logger.error(
-        `Checkout approved but not recorded — mpPaymentId=${result.id} userId=${userId} planId=${dto.planId} amount=${summary.total}`,
+        `Checkout approved but not recorded — mpPaymentId=${result.id} userId=${userId} planId=${dto.planId} amount=${charge.amount}`,
         error instanceof Error ? error.stack : error,
       );
       throw new ServiceUnavailableException(
@@ -331,6 +374,7 @@ export class CheckoutService {
 
   private async chargeExistingCard(
     userId: number,
+    amount: number,
     summary: CheckoutSummary,
     externalReference: string,
   ): Promise<MpPaymentResult> {
@@ -344,7 +388,7 @@ export class CheckoutService {
     return this.mercadoPagoClient.chargeSavedCard({
       customerId: card.mpCustomerId,
       cardId: card.mpCardId,
-      amount: summary.total,
+      amount,
       description: `Membresía FLG — ${summary.planName}`,
       externalReference,
       idempotencyKey: `checkout-${externalReference}`,
@@ -359,6 +403,7 @@ export class CheckoutService {
   private async chargeNewCard(
     dto: CheckoutDto,
     email: string,
+    amount: number,
     summary: CheckoutSummary,
     externalReference: string,
   ): Promise<{ result: MpPaymentResult; customerId?: string }> {
@@ -372,7 +417,7 @@ export class CheckoutService {
 
     const result = await this.mercadoPagoClient.chargeCardToken({
       token,
-      amount: summary.total,
+      amount,
       description: `Membresía FLG — ${summary.planName}`,
       externalReference,
       idempotencyKey: `checkout-${token}`,
@@ -390,6 +435,7 @@ export class CheckoutService {
     externalReference: string,
     userId: number,
     dto: CheckoutDto,
+    amount: number,
     summary: CheckoutSummary,
     customerId: string | undefined,
   ): Promise<CheckoutResult> {
@@ -399,7 +445,7 @@ export class CheckoutService {
         userId,
         planId: dto.planId,
         months: dto.months,
-        amount: summary.total,
+        amount,
         payMethod: 'mercadopago',
         registeredById: null,
         mpOrderId: result.mpOrderId,
@@ -415,7 +461,7 @@ export class CheckoutService {
       to: subscription.user.email,
       name: subscription.user.name,
       planName: subscription.plan.name,
-      amount: summary.total,
+      amount,
       termMonths: dto.months,
       method: 'mercadopago',
       newEndDate: subscription.endDate,
@@ -430,7 +476,7 @@ export class CheckoutService {
       paymentId: payment.id,
       newEndDate: String(subscription.endDate).slice(0, 10),
       planName: summary.planName,
-      amount: summary.total,
+      amount,
       months: dto.months,
     };
   }

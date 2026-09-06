@@ -551,6 +551,32 @@ describe('CheckoutService.pay', () => {
     });
   });
 
+  describe('resolveCharge', () => {
+    it('resolves the same amount for the three entry points', async () => {
+      // The Payment Brick shows what createPreference returns and the member is
+      // charged what pay() resolves. If these ever diverge, a member sees one
+      // price and is billed another.
+      plans.findPlan.mockResolvedValue({
+        id: 1,
+        price: 6000,
+        numDays: 30,
+        name: 'Basic',
+      });
+      planDurations.findByPlan.mockResolvedValue([]);
+
+      const dto = { planId: 1, months: 1 };
+      const resolved = await service.resolveCharge(7, dto);
+
+      expect(resolved).toEqual({
+        amount: 6000,
+        planDurationId: null,
+        termMonths: 1,
+        changeFromSubscriptionId: null,
+        endDateOverride: null,
+      });
+    });
+  });
+
   describe('CheckoutService.getStatus', () => {
     const reference = 'flg-user-7-a1b2c3d4';
 

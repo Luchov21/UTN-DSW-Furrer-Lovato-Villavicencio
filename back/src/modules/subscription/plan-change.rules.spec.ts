@@ -63,7 +63,7 @@ describe('daysRemaining', () => {
 });
 
 describe('assessChange', () => {
-  // 30 days into a 90-day term: past the lock, 61 days still to run.
+  // 30 days into a 90-day term: past the lock, 60 days still to run.
   const current = {
     plan: basic,
     state: 'activa',
@@ -74,15 +74,15 @@ describe('assessChange', () => {
   const today = '2026-01-31';
 
   it('prices an upgrade as the daily difference over the days remaining', () => {
-    // (300 - 200) * 61 = 6100. The member keeps 31/03 as their end date and
-    // pays 6100, not premium's full 9000.
+    // (300 - 200) * 60 = 6000. The member keeps 31/03 as their end date and
+    // pays 6000, not premium's full 9000.
     const result = assessChange({ next: premium, current, today });
 
     expect(result).toEqual({
       eligible: true,
       direction: 'upgrade',
-      amount: 6100,
-      daysRemaining: 61,
+      amount: 6000,
+      daysRemaining: 60,
     });
   });
 
@@ -115,7 +115,7 @@ describe('assessChange', () => {
       eligible: true,
       direction: 'downgrade',
       amount: 0,
-      daysRemaining: 61,
+      daysRemaining: 60,
     });
   });
 
@@ -130,7 +130,7 @@ describe('assessChange', () => {
       eligible: true,
       direction: 'lateral',
       amount: 0,
-      daysRemaining: 61,
+      daysRemaining: 60,
     });
   });
 

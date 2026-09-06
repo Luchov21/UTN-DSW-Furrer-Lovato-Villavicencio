@@ -90,23 +90,8 @@ export function daysRemaining(
   endDate: Date | string,
   today: Date | string,
 ): number {
-  const [todayYear, todayMonth, todayDay] = toDateOnly(today).split('-').map(Number);
-  const [endYear, endMonth, endDay] = toDateOnly(endDate).split('-').map(Number);
-
-  const todayJs = new Date(todayYear, todayMonth - 1, todayDay);
-  const endJs = new Date(endYear, endMonth - 1, endDay);
-
-  if (todayJs > endJs) {
-    return 0;
-  }
-
-  // Count calendar days from today through endDate by using endDate + 1 as exclusive upper bound
-  const endJsPlus1 = new Date(endYear, endMonth - 1, endDay + 1);
-  const msPerDay = 24 * 60 * 60 * 1000;
-  const diff = Math.round((endJsPlus1.getTime() - todayJs.getTime()) / msPerDay);
-
-  // For multi-month terms, add 1 to account for the term end day
-  return diff > 31 ? diff + 1 : diff;
+  const diff = daysBetween(today, endDate);
+  return diff < 0 ? 0 : diff + 1;
 }
 
 // The whole decision, in one place. Every one of the six block reasons is

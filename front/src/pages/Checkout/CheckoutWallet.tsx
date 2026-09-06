@@ -262,20 +262,25 @@ function CheckoutWallet() {
       subtitle="Ingresá los datos de tu tarjeta. El cobro se procesa a través de Mercado Pago."
       summary={summary}
     >
-      {isLoading ? (
+      {/* Only the very first load — before there's anything to show at all —
+          blanks the whole card. A duration change re-fetches the summary
+          and preference for the new months, but the card stays mounted with
+          its previous (still valid to look at) contents; only the payment
+          form area below falls back to an inline spinner while that finishes,
+          so picking a duration doesn't blank the whole page. */}
+      {!summary ? (
         <div className="flex h-48 items-center justify-center">
           <Loader2 className="h-8 w-8 animate-spin text-primary" />
         </div>
       ) : (
         <Card className="hover:translate-y-0 hover:shadow-lg">
           <div className="space-y-5">
-            {summary && (
-              <DurationSelector
-                summary={summary}
-                onChange={handleMonthsChange}
-                disabled={isPaying}
-              />
-            )}
+            <DurationSelector
+              summary={summary}
+              selectedMonths={months}
+              onChange={handleMonthsChange}
+              disabled={isPaying || isLoading}
+            />
 
             <FormAlert type="error" message={error} />
 
@@ -287,24 +292,29 @@ function CheckoutWallet() {
               card={card}
               useSavedCard={useSavedCard}
               onChange={setUseSavedCard}
-              disabled={isPaying}
+              disabled={isPaying || isLoading}
             />
 
             {!useSavedCard &&
-              summary &&
               (termsAccepted ? (
-                <PaymentForm
-                  // Remounts when the price or the preference changes: a Brick
-                  // left mounted across a duration switch would tokenize
-                  // against the amount it was initialized with.
-                  key={`${summary.total}-${preference?.preferenceId ?? 'cards'}`}
-                  amount={summary.total}
-                  preferenceId={preference?.preferenceId}
-                  onCardToken={(card) => void pay(card)}
-                  onWalletSubmit={handleWalletSubmit}
-                  onError={setError}
-                  isBusy={isPaying}
-                />
+                isLoading ? (
+                  <div className="flex h-40 items-center justify-center rounded-xl border border-border bg-background">
+                    <Loader2 className="h-6 w-6 animate-spin text-primary" />
+                  </div>
+                ) : (
+                  <PaymentForm
+                    // Remounts when the price or the preference changes: a
+                    // Brick left mounted across a duration switch would
+                    // tokenize against the amount it was initialized with.
+                    key={`${summary.total}-${preference?.preferenceId ?? 'cards'}`}
+                    amount={summary.total}
+                    preferenceId={preference?.preferenceId}
+                    onCardToken={(card) => void pay(card)}
+                    onWalletSubmit={handleWalletSubmit}
+                    onError={setError}
+                    isBusy={isPaying}
+                  />
+                )
               ) : (
                 <div className="rounded-xl border border-dashed border-border p-4 text-center text-sm text-text-muted">
                   Aceptá los Términos y Condiciones y el Reglamento de Uso para
@@ -317,13 +327,13 @@ function CheckoutWallet() {
               acceptedRules={acceptedRules}
               saveCard={saveCard}
               onChange={handleChange}
-              disabled={isPaying}
+              disabled={isPaying || isLoading}
             />
 
-            {useSavedCard && summary && (
+            {useSavedCard && (
               <Button
                 className="w-full"
-                disabled={!canPay}
+                disabled={!canPay || isLoading}
                 title={
                   canPay
                     ? undefined

@@ -3,6 +3,14 @@ import { formatPriceDisplay } from '../../lib/currency';
 
 interface DurationSelectorProps {
   summary: CheckoutSummary;
+  /**
+   * Which button reads as selected. Defaults to `summary.months` — but a
+   * caller that keeps the previous summary on screen while a fresh one
+   * loads (see CheckoutWallet) must pass the just-clicked value explicitly,
+   * or the selection would appear to snap back to the old duration until
+   * the reload finishes.
+   */
+  selectedMonths?: number;
   onChange: (months: number) => void;
   disabled?: boolean;
 }
@@ -14,6 +22,7 @@ const monthsLabel = (months: number) =>
 // option is labelled with its monthly equivalent rather than its total.
 const DurationSelector = ({
   summary,
+  selectedMonths,
   onChange,
   disabled,
 }: DurationSelectorProps) => {
@@ -28,7 +37,7 @@ const DurationSelector = ({
       </p>
       <div className="mt-2 grid grid-cols-2 gap-2">
         {summary.availableMonths.map((months) => {
-          const isSelected = months === summary.months;
+          const isSelected = months === (selectedMonths ?? summary.months);
           return (
             <button
               key={months}

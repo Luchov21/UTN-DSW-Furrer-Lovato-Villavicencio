@@ -30,6 +30,9 @@ import type {
 } from '../../types/checkout';
 import type { SavedCard } from '../../types/savedCard';
 
+const TERMS_REQUIRED_MESSAGE =
+  'Tenés que aceptar los Términos y Condiciones y el Reglamento de Uso para continuar.';
+
 function CheckoutWallet() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -149,6 +152,14 @@ function CheckoutWallet() {
       paymentTypeId: string;
     }) => {
       if (!planId) return;
+      // The Brick stays visible and usable before the checkboxes are
+      // accepted (see the render below) — this is the actual gate: tokenizing
+      // a card costs nothing, so refusing here, not by hiding the Brick,
+      // is what stops an unaccepted purchase from completing.
+      if (!termsAccepted) {
+        setError(TERMS_REQUIRED_MESSAGE);
+        return;
+      }
       // Reentrancy guard: the Brick's own submit-button lock releases as
       // soon as onToken (synchronous) returns, well before this async call
       // finishes — without this check a double-click can fire two
@@ -178,7 +189,7 @@ function CheckoutWallet() {
         setIsPaying(false);
       }
     },
-    [planId, months, useSavedCard, saveCard],
+    [planId, months, useSavedCard, saveCard, termsAccepted],
   );
 
   // A charge in flight must not be abandoned by a stray back/refresh.
@@ -212,6 +223,12 @@ function CheckoutWallet() {
     if (!planId || !preference || !summary) {
       throw new Error('No se pudo iniciar el pago con Mercado Pago.');
     }
+    // Same gate as pay() above, for the wallet redirect path: rejecting
+    // stops the Brick from redirecting to Mercado Pago at all.
+    if (!termsAccepted) {
+      setError(TERMS_REQUIRED_MESSAGE);
+      throw new Error(TERMS_REQUIRED_MESSAGE);
+    }
     // Safety net for the window opened by a duration change: navigating to a
     // new `months` re-triggers the load effect (see isLoading there), which
     // is what actually keeps the Brick from rendering against stale data.
@@ -242,7 +259,7 @@ function CheckoutWallet() {
       setError(message);
       throw err;
     }
-  }, [planId, months, preference, summary, preferenceForMonths]);
+  }, [planId, months, preference, summary, preferenceForMonths, termsAccepted]);
 
   if (result?.status === 'approved') {
     return (
@@ -295,31 +312,33 @@ function CheckoutWallet() {
               disabled={isPaying || isLoading}
             />
 
+            {/* The Brick stays visible and fillable before the checkboxes
+                below are accepted — submitBlockedMessage makes it reject its
+                own submission instead of clearing the card fields, and
+                pay()/handleWalletSubmit refuse the actual charge/redirect as
+                a second guard for the paths that don't go through the Brick
+                at all (the saved-card button below). */}
             {!useSavedCard &&
-              (termsAccepted ? (
-                isLoading ? (
-                  <div className="flex h-40 items-center justify-center rounded-xl border border-border bg-background">
-                    <Loader2 className="h-6 w-6 animate-spin text-primary" />
-                  </div>
-                ) : (
-                  <PaymentForm
-                    // Remounts when the price or the preference changes: a
-                    // Brick left mounted across a duration switch would
-                    // tokenize against the amount it was initialized with.
-                    key={`${summary.total}-${preference?.preferenceId ?? 'cards'}`}
-                    amount={summary.total}
-                    preferenceId={preference?.preferenceId}
-                    onCardToken={(card) => void pay(card)}
-                    onWalletSubmit={handleWalletSubmit}
-                    onError={setError}
-                    isBusy={isPaying}
-                  />
-                )
-              ) : (
-                <div className="rounded-xl border border-dashed border-border p-4 text-center text-sm text-text-muted">
-                  Aceptá los Términos y Condiciones y el Reglamento de Uso para
-                  elegir cómo querés pagar.
+              (isLoading ? (
+                <div className="flex h-40 items-center justify-center rounded-xl border border-border bg-background">
+                  <Loader2 className="h-6 w-6 animate-spin text-primary" />
                 </div>
+              ) : (
+                <PaymentForm
+                  // Remounts when the price or the preference changes: a
+                  // Brick left mounted across a duration switch would
+                  // tokenize against the amount it was initialized with.
+                  key={`${summary.total}-${preference?.preferenceId ?? 'cards'}`}
+                  amount={summary.total}
+                  preferenceId={preference?.preferenceId}
+                  onCardToken={(card) => void pay(card)}
+                  onWalletSubmit={handleWalletSubmit}
+                  onError={setError}
+                  isBusy={isPaying}
+                  submitBlockedMessage={
+                    termsAccepted ? undefined : TERMS_REQUIRED_MESSAGE
+                  }
+                />
               ))}
 
             <TermsAcceptance
@@ -334,11 +353,7 @@ function CheckoutWallet() {
               <Button
                 className="w-full"
                 disabled={!canPay || isLoading}
-                title={
-                  canPay
-                    ? undefined
-                    : 'Tenés que aceptar los términos y el reglamento para continuar.'
-                }
+                title={canPay ? undefined : TERMS_REQUIRED_MESSAGE}
                 onClick={() => void pay()}
               >
                 {isPaying
@@ -348,10 +363,7 @@ function CheckoutWallet() {
             )}
 
             {!termsAccepted && (
-              <p className="text-xs text-text-muted">
-                Tenés que aceptar los Términos y Condiciones y el Reglamento de
-                Uso para continuar.
-              </p>
+              <p className="text-xs text-text-muted">{TERMS_REQUIRED_MESSAGE}</p>
             )}
           </div>
         </Card>

@@ -1,3 +1,4 @@
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { Payment, initMercadoPago } from '@mercadopago/sdk-react';
 import { Loader2 } from 'lucide-react';
 import FormAlert from '../common/FormAlert';
@@ -37,6 +38,17 @@ interface PaymentFormProps {
   onWalletSubmit: () => Promise<void>;
   onError: (message: string) => void;
   isBusy?: boolean;
+  /**
+   * Set while the checkboxes below the Brick aren't both accepted yet. The
+   * Brick stays visible and fillable regardless (see CheckoutWallet) — this
+   * is what actually blocks the charge. It has to reject the Brick's own
+   * onSubmit, not just have the parent silently ignore onCardToken: a
+   * RESOLVED onSubmit reads as "submission accepted" to the Brick, which
+   * then clears the card fields, forcing the member to retype everything
+   * just to tick two boxes. Rejecting is the documented way to fail an
+   * attempt while leaving the form as the member left it.
+   */
+  submitBlockedMessage?: string;
 }
 
 // Only `token`, `payment_method_id` and the payment type are read from the
@@ -51,7 +63,103 @@ const PaymentForm = ({
   onWalletSubmit,
   onError,
   isBusy,
+  submitBlockedMessage,
 }: PaymentFormProps) => {
+  // The SDK's own Payment wrapper re-inits the whole Brick — wiping
+  // whatever the member already typed — any time `initialization`,
+  // `customization`, `onSubmit`, or `onError` change BY REFERENCE (its
+  // internal `useEffect` lists them as deps; see
+  // node_modules/@mercadopago/sdk-react/.../bricks/payment/index.js). All
+  // four used to be recreated fresh on every render (inline object/arrow
+  // literals), so ticking a checkbox in the parent — or any other unrelated
+  // re-render — reset the Brick. `latest` lets handleSubmit/handleError stay
+  // referentially stable for the component's whole mounted lifetime while
+  // still always acting on the current props; initialization/customization
+  // are memoized on the values that actually should change them.
+  const latest = useRef({ onCardToken, onWalletSubmit, onError, submitBlockedMessage });
+  // Updated in an effect, not during render — mutating a ref while rendering
+  // is what React's own lint rule (react-hooks/refs) flags, since it can
+  // desync from what was actually committed to the screen.
+  useEffect(() => {
+    latest.current = { onCardToken, onWalletSubmit, onError, submitBlockedMessage };
+  });
+
+  // The installed SDK types the Payment Brick's onSubmit as a single
+  // argument (`IPaymentFormData`, carrying `selectedPaymentMethod` and
+  // `formData` together) plus an optional second `additionalData` argument —
+  // unlike CardPayment's two-argument `(formData, additionalData)` shape.
+  // `formData`'s SDK type requires `token`/`payment_method_id` as non-
+  // optional strings; `BrickCardFormData` only needs them to be structurally
+  // compatible (optional is satisfied by required), so no cast is needed.
+  const handleSubmit = useCallback(
+    async (
+      {
+        selectedPaymentMethod,
+        formData,
+      }: { selectedPaymentMethod: string; formData: BrickCardFormData },
+      additionalData?: { paymentTypeId?: string } | null,
+    ): Promise<void> => {
+      const current = latest.current;
+      if (current.submitBlockedMessage) {
+        current.onError(current.submitBlockedMessage);
+        return Promise.reject(new Error(current.submitBlockedMessage));
+      }
+
+      const submission = classifySubmission(
+        selectedPaymentMethod,
+        formData,
+        additionalData ?? undefined,
+      );
+
+      if (submission.kind === 'unsupported') {
+        current.onError(submission.message);
+        // Rejecting rather than returning: a resolved promise tells the
+        // Brick the submission succeeded, and for a wallet method that
+        // means redirect.
+        return Promise.reject(new Error(submission.message));
+      }
+
+      if (submission.kind === 'wallet') {
+        // Not caught here: a rejection is what stops the redirect. The
+        // caller surfaces the message.
+        return current.onWalletSubmit();
+      }
+
+      current.onCardToken({
+        token: submission.token,
+        paymentMethodId: submission.paymentMethodId,
+        paymentTypeId: submission.paymentTypeId,
+      });
+    },
+    [],
+  );
+
+  const handleError = useCallback((err: unknown) => {
+    latest.current.onError(
+      getApiErrorMessage(err, 'No se pudo procesar el pago.'),
+    );
+  }, []);
+
+  const initialization = useMemo(
+    () => ({ amount, preferenceId }),
+    [amount, preferenceId],
+  );
+  const customization = useMemo(
+    () => ({
+      paymentMethods: {
+        creditCard: 'all' as const,
+        debitCard: 'all' as const,
+        prepaidCard: 'all' as const,
+        // Cash (`ticket`) is excluded by omission, which is Mercado Pago's
+        // documented way to drop a method type. The preference excludes it
+        // again for the hosted page.
+        ...(preferenceId ? { mercadoPago: ['wallet_purchase' as const] } : {}),
+        maxInstallments: 1,
+      },
+    }),
+    [preferenceId],
+  );
+
   if (!isConfigured) {
     return (
       <FormAlert
@@ -61,66 +169,13 @@ const PaymentForm = ({
     );
   }
 
-  // The installed SDK types the Payment Brick's onSubmit as a single
-  // argument (`IPaymentFormData`, carrying `selectedPaymentMethod` and
-  // `formData` together) plus an optional second `additionalData` argument —
-  // unlike CardPayment's two-argument `(formData, additionalData)` shape.
-  // `formData`'s SDK type requires `token`/`payment_method_id` as non-
-  // optional strings; `BrickCardFormData` only needs them to be structurally
-  // compatible (optional is satisfied by required), so no cast is needed.
-  const handleSubmit = async (
-    {
-      selectedPaymentMethod,
-      formData,
-    }: { selectedPaymentMethod: string; formData: BrickCardFormData },
-    additionalData?: { paymentTypeId?: string } | null,
-  ): Promise<void> => {
-    const submission = classifySubmission(
-      selectedPaymentMethod,
-      formData,
-      additionalData ?? undefined,
-    );
-
-    if (submission.kind === 'unsupported') {
-      onError(submission.message);
-      // Rejecting rather than returning: a resolved promise tells the Brick
-      // the submission succeeded, and for a wallet method that means redirect.
-      return Promise.reject(new Error(submission.message));
-    }
-
-    if (submission.kind === 'wallet') {
-      // Not caught here: a rejection is what stops the redirect. The caller
-      // surfaces the message.
-      return onWalletSubmit();
-    }
-
-    onCardToken({
-      token: submission.token,
-      paymentMethodId: submission.paymentMethodId,
-      paymentTypeId: submission.paymentTypeId,
-    });
-  };
-
   return (
     <div aria-busy={isBusy} className="relative">
       <Payment
-        initialization={{ amount, preferenceId }}
-        customization={{
-          paymentMethods: {
-            creditCard: 'all',
-            debitCard: 'all',
-            prepaidCard: 'all',
-            // Cash (`ticket`) is excluded by omission, which is Mercado
-            // Pago's documented way to drop a method type. The preference
-            // excludes it again for the hosted page.
-            ...(preferenceId ? { mercadoPago: ['wallet_purchase'] } : {}),
-            maxInstallments: 1,
-          },
-        }}
+        initialization={initialization}
+        customization={customization}
         onSubmit={handleSubmit}
-        onError={(err) =>
-          onError(getApiErrorMessage(err, 'No se pudo procesar el pago.'))
-        }
+        onError={handleError}
       />
       {/* Masks the Brick's own blank/processing state between onSubmit
           resolving and the parent swapping this whole form out for the

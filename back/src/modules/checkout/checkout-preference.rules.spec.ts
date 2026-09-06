@@ -68,6 +68,30 @@ describe('buildPreferenceBody', () => {
     );
   });
 
+  it('omits auto_return against a localhost frontend URL', () => {
+    // Mercado Pago rejects preference creation with "auto_return invalid.
+    // back_url.success must be defined" whenever back_urls points at
+    // localhost/127.0.0.1 — confirmed against the live API. back_urls
+    // itself is still sent, so "Volver al sitio" keeps working locally.
+    const body = buildPreferenceBody({
+      ...input,
+      frontendUrl: 'http://localhost:5173',
+    });
+    expect(body.auto_return).toBeUndefined();
+    expect(body.back_urls.success).toBe('http://localhost:5173/checkout/return');
+  });
+
+  it('omits auto_return against a bare 127.0.0.1 frontend URL, with or without a port', () => {
+    expect(
+      buildPreferenceBody({ ...input, frontendUrl: 'http://127.0.0.1:5173' })
+        .auto_return,
+    ).toBeUndefined();
+    expect(
+      buildPreferenceBody({ ...input, frontendUrl: 'http://127.0.0.1' })
+        .auto_return,
+    ).toBeUndefined();
+  });
+
   it('expires, so an unarmed preference cannot be paid indefinitely', () => {
     const body = buildPreferenceBody(input);
     expect(body.expires).toBe(true);

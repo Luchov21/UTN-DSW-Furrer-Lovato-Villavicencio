@@ -34,7 +34,15 @@ export interface PreferenceBody {
     excluded_payment_types: { id: string }[];
   };
   back_urls: { success: string; pending: string; failure: string };
-  auto_return: 'approved';
+  /**
+   * Omitted entirely against a local dev URL — Mercado Pago rejects
+   * `auto_return` with "back_url.success must be defined" whenever
+   * `back_urls` points at `localhost`/`127.0.0.1` (documented: "No utilices
+   * dominios locales en el valor back_urls"). `back_urls` itself is still
+   * sent either way, so the "Volver al sitio" button keeps working locally
+   * — only the automatic redirect-on-approval is unavailable there.
+   */
+  auto_return?: 'approved';
   expires: boolean;
   expiration_date_to: string;
 }
@@ -57,6 +65,18 @@ export function buildPreferenceBody(
   // to a different path than the router registers.
   const origin = input.frontendUrl.replace(/\/+$/, '');
   const returnUrl = `${origin}/checkout/return`;
+
+  // Matches Mercado Pago's own restriction, not an arbitrary local check:
+  // 'https://…/checkout/return'.hostname would be 'flg.example.com', but
+  // for a local dev URL it's exactly 'localhost' or '127.0.0.1' (with or
+  // without a port, which the URL parser strips into `hostname` already).
+  let isLocalHost = false;
+  try {
+    const hostname = new URL(returnUrl).hostname;
+    isLocalHost = hostname === 'localhost' || hostname === '127.0.0.1';
+  } catch {
+    isLocalHost = false;
+  }
 
   return {
     purpose: 'wallet_purchase',
@@ -81,7 +101,7 @@ export function buildPreferenceBody(
       pending: returnUrl,
       failure: returnUrl,
     },
-    auto_return: 'approved',
+    ...(isLocalHost ? {} : { auto_return: 'approved' as const }),
     // `expires` is what makes `expiration_date_to` take effect; the date
     // alone is ignored.
     expires: true,

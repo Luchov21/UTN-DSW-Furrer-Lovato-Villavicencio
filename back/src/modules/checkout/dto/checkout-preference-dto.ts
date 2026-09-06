@@ -1,4 +1,10 @@
-import { IsIn, IsInt, IsOptional, IsPositive, ValidateIf } from 'class-validator';
+import {
+  IsIn,
+  IsInt,
+  IsOptional,
+  IsPositive,
+  ValidateIf,
+} from 'class-validator';
 
 // No amount, by the same rule as CheckoutDto: the backend resolves the price
 // from the plan, because a client-supplied amount is a free-membership hole.

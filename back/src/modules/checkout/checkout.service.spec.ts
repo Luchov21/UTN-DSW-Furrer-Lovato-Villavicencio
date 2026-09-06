@@ -552,6 +552,53 @@ describe('CheckoutService.pay', () => {
         ConflictException,
       );
     });
+
+    it('arms a plan-change order at the prorated amount instead of throwing on an undefined term', async () => {
+      // Regression test: createPreference/pay/armOrder used to call
+      // getSummary(dto.planId, dto.months) unconditionally, and armOrder
+      // forwarded dto.months straight into createCharge. dto.months is
+      // undefined by design in plan-change mode (@ValidateIf on the DTOs),
+      // so both would throw "no tiene un precio para undefined meses" before
+      // ever reaching resolveCharge's plan-change branch below.
+      jest.useFakeTimers().setSystemTime(new Date(2026, 0, 31));
+      chargeOrders.findByExternalReference.mockResolvedValue(null);
+      subscriptions.findChangeContext.mockResolvedValue({
+        subscription: { id: 10, endDate: '2026-03-31' },
+        current: {
+          plan: { id: 1, price: 6000, numDays: 30 },
+          state: 'activa',
+          termStartDate: '2026-01-01',
+          endDate: '2026-03-31',
+          alreadyChanged: false,
+        },
+      });
+      plans.findPlan.mockResolvedValue({
+        id: 2,
+        price: 9000,
+        numDays: 30,
+        name: 'Premium',
+      });
+
+      await service.armOrder(7, {
+        planId: 2,
+        mode: 'plan-change',
+        externalReference: 'flg-user-7-a1b2c3d4',
+      } as never);
+
+      expect(chargeOrders.createCharge).toHaveBeenCalledWith({
+        userId: 7,
+        planId: 2,
+        // 0, not undefined: charge.termMonths, resolveCharge's own resolved
+        // value for a plan change.
+        months: 0,
+        amount: 6000,
+        method: 'online',
+        collectionPointId: null,
+        adminId: null,
+        externalReference: 'flg-user-7-a1b2c3d4',
+      });
+      jest.useRealTimers();
+    });
   });
 
   describe('resolveCharge', () => {
@@ -623,7 +670,10 @@ describe('CheckoutService.pay', () => {
       jest.useFakeTimers().setSystemTime(new Date(2026, 0, 31));
       subscriptions.findChangeContext.mockResolvedValue({
         ...activeBasic,
-        current: { ...activeBasic.current, plan: { id: 2, price: 9000, numDays: 30 } },
+        current: {
+          ...activeBasic.current,
+          plan: { id: 2, price: 9000, numDays: 30 },
+        },
       });
       plans.findPlan.mockResolvedValue({
         id: 1,
@@ -655,7 +705,9 @@ describe('CheckoutService.pay', () => {
 
       expect(quote.eligible).toBe(false);
       expect(quote.reason).toBe('locked');
-      expect(quote.message).toBe('Podés cambiar de plan a partir del 31/01/2026.');
+      expect(quote.message).toBe(
+        'Podés cambiar de plan a partir del 31/01/2026.',
+      );
       jest.useRealTimers();
     });
   });

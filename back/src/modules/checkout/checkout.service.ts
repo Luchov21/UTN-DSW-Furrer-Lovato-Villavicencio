@@ -114,17 +114,24 @@ export class CheckoutService {
       : null;
 
     if (!assessment.eligible) {
+      // Same instanceof guard as endDate above, for the same reason: this is
+      // typed Date | string, and MySQL always hands back a string today, but
+      // a re-parse through String(new Date()) would be wrong if that ever
+      // changes.
+      const termStartDate = context
+        ? context.current.termStartDate instanceof Date
+          ? toDateOnly(context.current.termStartDate)
+          : String(context.current.termStartDate).slice(0, 10)
+        : null;
+
       return {
         planId,
         planName: plan.name,
         eligible: false,
         reason: assessment.reason,
         message: blockMessage(assessment.reason, {
-          unlocksOn: context
-            ? addDays(
-                String(context.current.termStartDate).slice(0, 10),
-                PLAN_CHANGE_LOCK_DAYS,
-              )
+          unlocksOn: termStartDate
+            ? addDays(termStartDate, PLAN_CHANGE_LOCK_DAYS)
             : undefined,
         }),
         direction: null,
@@ -179,9 +186,7 @@ export class CheckoutService {
       // returned a live subscription, which is exactly what assessChange's
       // 'no_active_subscription' branch (the only branch reachable with a
       // null context) refuses before reaching here.
-      const context = await this.subscriptionService.findChangeContext(
-        userId,
-      );
+      const context = await this.subscriptionService.findChangeContext(userId);
 
       return {
         amount: quote.amount,
@@ -224,7 +229,15 @@ export class CheckoutService {
     externalReference: string;
     amount: number;
   }> {
-    const summary = await this.getSummary(dto.planId, dto.months);
+    // getSummary prices a TERM. A plan change never buys one — dto.months is
+    // undefined by design in that mode (see @ValidateIf on the DTOs) — so
+    // calling it unconditionally would throw before resolveCharge's
+    // plan-change branch is ever reached. Only the plan's name is needed
+    // here, so it is read directly instead of through a term-priced summary.
+    const planName =
+      dto.mode === 'plan-change'
+        ? ((await this.planService.findPlan(dto.planId))?.name ?? '')
+        : (await this.getSummary(dto.planId, dto.months)).planName;
     const charge = await this.resolveCharge(userId, dto);
     const externalReference = buildExternalReference(
       userId,
@@ -233,7 +246,7 @@ export class CheckoutService {
 
     try {
       const preference = await this.mercadoPagoClient.createPreference({
-        planName: summary.planName,
+        planName,
         amount: charge.amount,
         externalReference,
         payerEmail: email,
@@ -303,7 +316,11 @@ export class CheckoutService {
     await this.chargeOrderService.createCharge({
       userId,
       planId: dto.planId,
-      months: dto.months,
+      // Not dto.months: it is undefined in plan-change mode. charge.termMonths
+      // is resolveCharge's own resolved value — 0 for a plan change, and
+      // otherwise identical to dto.months for a term sale — so this can never
+      // hand createCharge an undefined months.
+      months: charge.termMonths,
       amount: charge.amount,
       method: 'online',
       collectionPointId: null,
@@ -365,13 +382,20 @@ export class CheckoutService {
     email: string,
     dto: CheckoutDto,
   ): Promise<CheckoutResult> {
-    const summary = await this.getSummary(dto.planId, dto.months);
+    // Same reasoning as createPreference: getSummary prices a term, which a
+    // plan change never buys, so it is skipped in favour of the plan's name
+    // alone in that mode.
+    const planName =
+      dto.mode === 'plan-change'
+        ? ((await this.planService.findPlan(dto.planId))?.name ?? '')
+        : (await this.getSummary(dto.planId, dto.months)).planName;
     const charge = await this.resolveCharge(userId, dto);
 
     const order = await this.chargeOrderService.createCharge({
       userId,
       planId: dto.planId,
-      months: dto.months,
+      // Not dto.months — see armOrder's identical comment.
+      months: charge.termMonths,
       amount: charge.amount,
       method: 'online',
       collectionPointId: null,
@@ -388,7 +412,7 @@ export class CheckoutService {
         result = await this.chargeExistingCard(
           userId,
           charge.amount,
-          summary,
+          planName,
           order.externalReference,
         );
       } else {
@@ -396,7 +420,7 @@ export class CheckoutService {
           dto,
           email,
           charge.amount,
-          summary,
+          planName,
           order.externalReference,
         );
         result = cardCharge.result;
@@ -462,7 +486,7 @@ export class CheckoutService {
         userId,
         dto,
         charge.amount,
-        summary,
+        planName,
         customerId,
       );
     } catch (error) {
@@ -484,7 +508,7 @@ export class CheckoutService {
   private async chargeExistingCard(
     userId: number,
     amount: number,
-    summary: CheckoutSummary,
+    planName: string,
     externalReference: string,
   ): Promise<MpPaymentResult> {
     const card = await this.savedCardService.findActiveForUser(userId);
@@ -498,7 +522,7 @@ export class CheckoutService {
       customerId: card.mpCustomerId,
       cardId: card.mpCardId,
       amount,
-      description: `Membresía FLG — ${summary.planName}`,
+      description: `Membresía FLG — ${planName}`,
       externalReference,
       idempotencyKey: `checkout-${externalReference}`,
       paymentMethodId: card.paymentMethodId,
@@ -513,7 +537,7 @@ export class CheckoutService {
     dto: CheckoutDto,
     email: string,
     amount: number,
-    summary: CheckoutSummary,
+    planName: string,
     externalReference: string,
   ): Promise<{ result: MpPaymentResult; customerId?: string }> {
     const token = dto.cardToken as string;
@@ -527,7 +551,7 @@ export class CheckoutService {
     const result = await this.mercadoPagoClient.chargeCardToken({
       token,
       amount,
-      description: `Membresía FLG — ${summary.planName}`,
+      description: `Membresía FLG — ${planName}`,
       externalReference,
       idempotencyKey: `checkout-${token}`,
       customerId: customer?.id,
@@ -545,7 +569,7 @@ export class CheckoutService {
     userId: number,
     dto: CheckoutDto,
     amount: number,
-    summary: CheckoutSummary,
+    planName: string,
     customerId: string | undefined,
   ): Promise<CheckoutResult> {
     const { payment, subscription } =
@@ -584,7 +608,7 @@ export class CheckoutService {
       status: 'approved',
       paymentId: payment.id,
       newEndDate: String(subscription.endDate).slice(0, 10),
-      planName: summary.planName,
+      planName,
       amount,
       months: dto.months,
     };

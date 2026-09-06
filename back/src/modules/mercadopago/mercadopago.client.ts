@@ -621,11 +621,17 @@ export class MercadoPagoClient {
           errors.length > 0
             ? errors.map((e) => e.message).filter(Boolean).join('; ')
             : undefined;
-        throw this.wrapError('chargeOnlineOrder', {
-          message,
-          status: response.status,
-          causes: errors,
-        });
+        // wrapError only reads `.message` off an actual Error instance (it
+        // falls back to String(err) for a plain object, which stringifies
+        // to the useless "[object Object]") — so the parsed reason has to
+        // be attached to a real Error, not passed as a bare object.
+        throw this.wrapError(
+          'chargeOnlineOrder',
+          Object.assign(new Error(message ?? 'MercadoPago API error'), {
+            status: response.status,
+            causes: errors,
+          }),
+        );
       }
       const order = responseBody;
 

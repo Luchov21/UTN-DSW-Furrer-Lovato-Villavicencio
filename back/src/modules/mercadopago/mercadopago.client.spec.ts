@@ -283,17 +283,22 @@ describe('MercadoPagoClient', () => {
         ],
       });
 
-      await expect(
-        client.chargeCardToken({
-          token: 'tok_abc',
-          amount: 19995,
-          externalReference: 'flg-user-3-abcd1234',
-          idempotencyKey: 'checkout-tok_abc',
-          customerId: '',
-          paymentMethodId: 'visa',
-          paymentTypeId: 'credit_card',
-        }),
-      ).rejects.toThrow(/customer_id.*length must be/);
+      const promise = client.chargeCardToken({
+        token: 'tok_abc',
+        amount: 19995,
+        externalReference: 'flg-user-3-abcd1234',
+        idempotencyKey: 'checkout-tok_abc',
+        customerId: '',
+        paymentMethodId: 'visa',
+        paymentTypeId: 'credit_card',
+      });
+
+      await expect(promise).rejects.toThrow(/customer_id.*length must be/);
+      // The regex above would also match against the appended
+      // `causes=[...]` JSON alone — this pins down that the leading
+      // message text itself is the real reason, not the useless
+      // "[object Object]" a plain (non-Error) thrown value stringifies to.
+      await expect(promise).rejects.not.toThrow(/\[object Object\]/);
     });
 
     it('does not treat a rejected order as an error', async () => {

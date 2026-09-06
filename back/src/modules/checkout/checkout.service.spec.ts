@@ -40,7 +40,7 @@ describe('CheckoutService.pay', () => {
     saveForUser: jest.Mock;
     saveFromApprovedPayment: jest.Mock;
   };
-  let subscriptions: { setAutoRenew: jest.Mock };
+  let subscriptions: { setAutoRenew: jest.Mock; findChangeContext: jest.Mock };
   let mail: { sendPaymentReceipt: jest.Mock };
 
   const plan = {
@@ -109,7 +109,10 @@ describe('CheckoutService.pay', () => {
       saveForUser: jest.fn(),
       saveFromApprovedPayment: jest.fn().mockResolvedValue({ id: 5 }),
     };
-    subscriptions = { setAutoRenew: jest.fn() };
+    subscriptions = {
+      setAutoRenew: jest.fn(),
+      findChangeContext: jest.fn(),
+    };
     mail = { sendPaymentReceipt: jest.fn().mockResolvedValue(undefined) };
 
     const moduleRef = await Test.createTestingModule({
@@ -574,6 +577,165 @@ describe('CheckoutService.pay', () => {
         changeFromSubscriptionId: null,
         endDateOverride: null,
       });
+    });
+  });
+
+  describe('getPlanChangeQuote', () => {
+    const activeBasic = {
+      subscription: { id: 10, endDate: '2026-03-31' },
+      current: {
+        plan: { id: 1, price: 6000, numDays: 30 },
+        state: 'activa',
+        termStartDate: '2026-01-01',
+        endDate: '2026-03-31',
+        alreadyChanged: false,
+      },
+    };
+
+    it('quotes an upgrade as the difference, keeping the end date', async () => {
+      jest.useFakeTimers().setSystemTime(new Date(2026, 0, 31));
+      subscriptions.findChangeContext.mockResolvedValue(activeBasic);
+      plans.findPlan.mockResolvedValue({
+        id: 2,
+        price: 9000,
+        numDays: 30,
+        name: 'Premium',
+      });
+
+      // 30 days elapsed of a 90-day term (Jan 1 - Mar 31) leaves 60 days
+      // remaining, not 61 — the brief's own fixture asserted 61/6100, which
+      // is off by one day against the merged Task 2 daysRemaining/assessChange.
+      expect(await service.getPlanChangeQuote(7, 2)).toEqual({
+        planId: 2,
+        planName: 'Premium',
+        eligible: true,
+        reason: null,
+        message: null,
+        direction: 'upgrade',
+        amount: 6000,
+        daysRemaining: 60,
+        effectiveEndDate: '2026-03-31',
+      });
+      jest.useRealTimers();
+    });
+
+    it('quotes a downgrade at zero, effective at the end of the term', async () => {
+      jest.useFakeTimers().setSystemTime(new Date(2026, 0, 31));
+      subscriptions.findChangeContext.mockResolvedValue({
+        ...activeBasic,
+        current: { ...activeBasic.current, plan: { id: 2, price: 9000, numDays: 30 } },
+      });
+      plans.findPlan.mockResolvedValue({
+        id: 1,
+        price: 6000,
+        numDays: 30,
+        name: 'Basic',
+      });
+
+      expect(await service.getPlanChangeQuote(7, 1)).toMatchObject({
+        eligible: true,
+        direction: 'downgrade',
+        amount: 0,
+        effectiveEndDate: '2026-03-31',
+      });
+      jest.useRealTimers();
+    });
+
+    it('carries the Spanish reason when the change is refused', async () => {
+      jest.useFakeTimers().setSystemTime(new Date(2026, 0, 10));
+      subscriptions.findChangeContext.mockResolvedValue(activeBasic);
+      plans.findPlan.mockResolvedValue({
+        id: 2,
+        price: 9000,
+        numDays: 30,
+        name: 'Premium',
+      });
+
+      const quote = await service.getPlanChangeQuote(7, 2);
+
+      expect(quote.eligible).toBe(false);
+      expect(quote.reason).toBe('locked');
+      expect(quote.message).toBe('Podés cambiar de plan a partir del 31/01/2026.');
+      jest.useRealTimers();
+    });
+  });
+
+  describe('resolveCharge in plan-change mode', () => {
+    it('returns the prorated amount, termMonths 0 and the inherited end date', async () => {
+      jest.useFakeTimers().setSystemTime(new Date(2026, 0, 31));
+      subscriptions.findChangeContext.mockResolvedValue({
+        subscription: { id: 10, endDate: '2026-03-31' },
+        current: {
+          plan: { id: 1, price: 6000, numDays: 30 },
+          state: 'activa',
+          termStartDate: '2026-01-01',
+          endDate: '2026-03-31',
+          alreadyChanged: false,
+        },
+      });
+      plans.findPlan.mockResolvedValue({
+        id: 2,
+        price: 9000,
+        numDays: 30,
+        name: 'Premium',
+      });
+
+      // See the note in getPlanChangeQuote above: 6000/60, not the brief's
+      // original 6100/61.
+      expect(
+        await service.resolveCharge(7, { planId: 2, mode: 'plan-change' }),
+      ).toEqual({
+        amount: 6000,
+        planDurationId: null,
+        termMonths: 0,
+        changeFromSubscriptionId: 10,
+        endDateOverride: '2026-03-31',
+      });
+      jest.useRealTimers();
+    });
+
+    it('refuses to charge for a change that is not eligible', async () => {
+      jest.useFakeTimers().setSystemTime(new Date(2026, 0, 31));
+      subscriptions.findChangeContext.mockResolvedValue(null);
+      plans.findPlan.mockResolvedValue({
+        id: 2,
+        price: 9000,
+        numDays: 30,
+        name: 'Premium',
+      });
+
+      await expect(
+        service.resolveCharge(7, { planId: 2, mode: 'plan-change' }),
+      ).rejects.toThrow('No tenés un plan activo para cambiar.');
+      jest.useRealTimers();
+    });
+
+    it('refuses to charge for a downgrade, which never costs money', async () => {
+      // A zero-peso charge cannot go through Mercado Pago. Reaching checkout
+      // at all for a downgrade is a frontend bug, and this is where it
+      // surfaces.
+      jest.useFakeTimers().setSystemTime(new Date(2026, 0, 31));
+      subscriptions.findChangeContext.mockResolvedValue({
+        subscription: { id: 10, endDate: '2026-03-31' },
+        current: {
+          plan: { id: 2, price: 9000, numDays: 30 },
+          state: 'activa',
+          termStartDate: '2026-01-01',
+          endDate: '2026-03-31',
+          alreadyChanged: false,
+        },
+      });
+      plans.findPlan.mockResolvedValue({
+        id: 1,
+        price: 6000,
+        numDays: 30,
+        name: 'Basic',
+      });
+
+      await expect(
+        service.resolveCharge(7, { planId: 1, mode: 'plan-change' }),
+      ).rejects.toThrow(ConflictException);
+      jest.useRealTimers();
     });
   });
 

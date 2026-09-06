@@ -1,4 +1,5 @@
 import {
+  addDays,
   dayAfter,
   isCurrentOn,
   subscriptionPeriod,
@@ -124,5 +125,19 @@ describe('dayAfter', () => {
 
   it('crosses a month boundary correctly', () => {
     expect(toDateOnly(dayAfter('2026-08-31'))).toBe('2026-09-01');
+  });
+});
+
+describe('addDays', () => {
+  it('adds the given number of days, as a date-only string', () => {
+    expect(addDays('2026-01-01', 30)).toBe('2026-01-31');
+  });
+
+  it('crosses a month boundary', () => {
+    expect(addDays('2026-08-20', 15)).toBe('2026-09-04');
+  });
+
+  it('returns the same date for zero days', () => {
+    expect(addDays('2026-01-01', 0)).toBe('2026-01-01');
   });
 });

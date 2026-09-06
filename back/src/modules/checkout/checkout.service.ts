@@ -23,6 +23,12 @@ import { SavedCardService } from '../savedCard/savedCard.service';
 import { isChargeable } from '../savedCard/savedCard.rules';
 import { subscriptionService } from '../subscription/subscription.service';
 import { MailService } from '../../common/mail/mail.service';
+import {
+  assessChange,
+  blockMessage,
+  PLAN_CHANGE_LOCK_DAYS,
+} from '../subscription/plan-change.rules';
+import { addDays, toDateOnly } from '../subscription/subscription.rules';
 import type { CheckoutDto } from './dto/checkout-dto';
 import type { CheckoutPreferenceDto } from './dto/checkout-preference-dto';
 import type { CheckoutArmDto } from './dto/checkout-arm-dto';
@@ -31,6 +37,7 @@ import {
   type CheckoutResult,
   type CheckoutStatusResult,
   type CheckoutSummary,
+  type PlanChangeQuote,
 } from './checkout.rules';
 
 export interface ResolvedCharge {
@@ -72,6 +79,75 @@ export class CheckoutService {
   }
 
   /**
+   * The priced, member-specific quote for changing to `planId` from the
+   * member's live subscription — what GET /checkout/plan-change returns and
+   * what resolveCharge's plan-change mode prices a charge from. Never throws
+   * for an ineligible change: the refusal is part of the quote, in Spanish,
+   * so the frontend can render it without a second round trip.
+   */
+  async getPlanChangeQuote(
+    userId: number,
+    planId: number,
+  ): Promise<PlanChangeQuote> {
+    const plan = await this.planService.findPlan(planId);
+    if (!plan || plan.deleted) {
+      throw new NotFoundException(`El plan con ID: ${planId} no existe.`);
+    }
+
+    const context = await this.subscriptionService.findChangeContext(userId);
+    const today = toDateOnly(new Date());
+    const assessment = assessChange({
+      next: plan,
+      current: context?.current ?? null,
+      today,
+    });
+
+    // Not `new Date(context.current.endDate)`: the value is already a
+    // date-only string (or a Date TypeORM already resolved), and re-parsing a
+    // 'YYYY-MM-DD' string through `new Date()` reads it as UTC midnight —
+    // which shifts a day backward in Argentina (UTC-3), the same trap
+    // dayAfter's own comment documents.
+    const endDate = context
+      ? context.current.endDate instanceof Date
+        ? toDateOnly(context.current.endDate)
+        : String(context.current.endDate).slice(0, 10)
+      : null;
+
+    if (!assessment.eligible) {
+      return {
+        planId,
+        planName: plan.name,
+        eligible: false,
+        reason: assessment.reason,
+        message: blockMessage(assessment.reason, {
+          unlocksOn: context
+            ? addDays(
+                String(context.current.termStartDate).slice(0, 10),
+                PLAN_CHANGE_LOCK_DAYS,
+              )
+            : undefined,
+        }),
+        direction: null,
+        amount: 0,
+        daysRemaining: 0,
+        effectiveEndDate: endDate,
+      };
+    }
+
+    return {
+      planId,
+      planName: plan.name,
+      eligible: true,
+      reason: null,
+      message: null,
+      direction: assessment.direction,
+      amount: assessment.amount,
+      daysRemaining: assessment.daysRemaining,
+      effectiveEndDate: endDate,
+    };
+  }
+
+  /**
    * The single source of truth for what a member is about to be charged.
    *
    * createPreference, armOrder and pay MUST all go through this and none of
@@ -81,8 +157,41 @@ export class CheckoutService {
    */
   async resolveCharge(
     userId: number,
-    dto: { planId: number; months?: number },
+    dto: { planId: number; months?: number; mode?: 'term' | 'plan-change' },
   ): Promise<ResolvedCharge> {
+    if (dto.mode === 'plan-change') {
+      const quote = await this.getPlanChangeQuote(userId, dto.planId);
+      if (!quote.eligible) {
+        throw new ConflictException(
+          quote.message ?? 'No podés cambiar de plan.',
+        );
+      }
+      if (quote.amount <= 0) {
+        // Downgrades and lateral moves cost nothing and are applied through
+        // PUT /subscription/me/plan-change. Mercado Pago cannot take a
+        // zero-peso payment, so this must never reach a charge.
+        throw new ConflictException(
+          'Este cambio de plan no tiene costo. Aplicalo desde tu panel, sin pasar por el pago.',
+        );
+      }
+
+      // Not null: an eligible quote requires findChangeContext to have
+      // returned a live subscription, which is exactly what assessChange's
+      // 'no_active_subscription' branch (the only branch reachable with a
+      // null context) refuses before reaching here.
+      const context = await this.subscriptionService.findChangeContext(
+        userId,
+      );
+
+      return {
+        amount: quote.amount,
+        planDurationId: null,
+        termMonths: 0,
+        changeFromSubscriptionId: context!.subscription.id,
+        endDateOverride: quote.effectiveEndDate as unknown as Date,
+      };
+    }
+
     const summary = await this.getSummary(dto.planId, dto.months ?? 1);
     const plan = await this.planService.findPlan(dto.planId);
     const durations = await this.planDurationService.findByPlan(dto.planId);

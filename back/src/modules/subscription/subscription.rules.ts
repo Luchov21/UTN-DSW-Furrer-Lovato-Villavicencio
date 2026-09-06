@@ -99,3 +99,12 @@ export function dayAfter(dateOnly: string): Date {
   const [year, month, day] = dateOnly.slice(0, 10).split('-').map(Number);
   return new Date(year, month - 1, day + 1);
 }
+
+// `dateOnly` plus `days` calendar days, as 'YYYY-MM-DD', parsed from local
+// date parts the same way dayAfter is — the same UTC-shift trap applies here.
+// Used to render a plan-change lock's unlock date from its start date and
+// PLAN_CHANGE_LOCK_DAYS.
+export function addDays(dateOnly: string, days: number): string {
+  const [year, month, day] = dateOnly.slice(0, 10).split('-').map(Number);
+  return toDateOnly(new Date(year, month - 1, day + days));
+}

@@ -2,9 +2,11 @@ import {
   IsIn,
   IsInt,
   IsNotEmpty,
+  IsOptional,
   IsPositive,
   IsString,
   Matches,
+  ValidateIf,
 } from 'class-validator';
 
 // Still no amount: armOrder re-prices from the plan. The reference is the one
@@ -16,6 +18,14 @@ export class CheckoutArmDto {
   @IsPositive()
   planId!: number;
 
+  // 'plan-change' prices the prorated difference against the member's live
+  // subscription instead of selling a term. Optional so every existing client
+  // keeps working unchanged.
+  @IsOptional()
+  @IsIn(['term', 'plan-change'])
+  mode?: 'term' | 'plan-change';
+
+  @ValidateIf((dto: CheckoutArmDto) => dto.mode !== 'plan-change')
   @IsInt()
   @IsIn([1, 3, 6, 12])
   months!: number;

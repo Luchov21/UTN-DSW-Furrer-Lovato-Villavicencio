@@ -1,6 +1,10 @@
 import type { Plan } from '../plan/entity/plan.entity';
 import type { PlanDuration } from '../plan/entity/plan-duration.entity';
 import { resolveTerm } from '../plan/plan-duration.rules';
+import type {
+  BlockReason,
+  ChangeDirection,
+} from '../subscription/plan-change.rules';
 
 export interface CheckoutSummary {
   planId: number;
@@ -37,6 +41,23 @@ export interface CheckoutStatusResult {
   planName?: string;
   amount?: number;
   months?: number;
+}
+
+// What GET /checkout/plan-change returns: the priced, member-specific quote
+// for changing to `planId`. front/src/types/plan-change.ts (Task 11) mirrors
+// this shape.
+export interface PlanChangeQuote {
+  planId: number;
+  planName: string;
+  eligible: boolean;
+  reason: BlockReason | null;
+  /** Spanish, ready to render. Null when eligible. */
+  message: string | null;
+  direction: ChangeDirection | null;
+  amount: number;
+  daysRemaining: number;
+  /** 'YYYY-MM-DD'. The end date the member keeps, or gets their change on. */
+  effectiveEndDate: string | null;
 }
 
 /**

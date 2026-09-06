@@ -12,6 +12,7 @@ import { CheckoutDto } from './dto/checkout-dto';
 import { CheckoutPreferenceDto } from './dto/checkout-preference-dto';
 import { CheckoutArmDto } from './dto/checkout-arm-dto';
 import { CheckoutStatusQueryDto } from './dto/checkout-status-query-dto';
+import { PlanChangeQueryDto } from './dto/plan-change-query-dto';
 
 @Controller('api/v1/checkout')
 @ApiTags('Checkout')
@@ -27,6 +28,18 @@ export class CheckoutController {
   @Get('summary')
   getSummary(@Query() query: CheckoutSummaryQueryDto) {
     return this.checkoutService.getSummary(query.planId, query.months);
+  }
+
+  // Authenticated, unlike GET /summary: a prorated price depends on the
+  // member's own live subscription and cannot be computed for a guest. That is
+  // why this is a separate route rather than a flag on the public one.
+  @Get('plan-change')
+  @Auth(Role.USER)
+  getPlanChangeQuote(
+    @ActiveUser() user: UserActiveInterface,
+    @Query() query: PlanChangeQueryDto,
+  ) {
+    return this.checkoutService.getPlanChangeQuote(user.sub, query.planId);
   }
 
   // Self-service: charges the authenticated member. userId and email come

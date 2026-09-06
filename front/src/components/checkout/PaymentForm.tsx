@@ -1,4 +1,5 @@
 import { Payment, initMercadoPago } from '@mercadopago/sdk-react';
+import { Loader2 } from 'lucide-react';
 import FormAlert from '../common/FormAlert';
 import { getApiErrorMessage } from '../../services/api-error';
 import { classifySubmission, type BrickCardFormData } from './payment-brick';
@@ -7,7 +8,7 @@ const publicKey = import.meta.env.VITE_MP_PUBLIC_KEY;
 const isConfigured = Boolean(publicKey);
 
 if (isConfigured) {
-  initMercadoPago(publicKey);
+  initMercadoPago(publicKey, { locale: 'es-AR' });
 }
 
 interface PaymentFormProps {
@@ -101,7 +102,7 @@ const PaymentForm = ({
   };
 
   return (
-    <div aria-busy={isBusy}>
+    <div aria-busy={isBusy} className="relative">
       <Payment
         initialization={{ amount, preferenceId }}
         customization={{
@@ -121,6 +122,15 @@ const PaymentForm = ({
           onError(getApiErrorMessage(err, 'No se pudo procesar el pago.'))
         }
       />
+      {/* Masks the Brick's own blank/processing state between onSubmit
+          resolving and the parent swapping this whole form out for the
+          result — without this, that gap reads as the page breaking. */}
+      {isBusy && (
+        <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 rounded-xl bg-background/90 backdrop-blur-sm">
+          <Loader2 className="h-8 w-8 animate-spin text-primary" />
+          <p className="text-sm text-text-muted">Procesando tu pago...</p>
+        </div>
+      )}
     </div>
   );
 };

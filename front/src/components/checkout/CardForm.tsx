@@ -8,7 +8,7 @@ const isConfigured = Boolean(publicKey);
 // Runs once at module load; initMercadoPago just re-sets the key if called
 // again, so per-mount initialization would be wasted work.
 if (isConfigured) {
-  initMercadoPago(publicKey);
+  initMercadoPago(publicKey, { locale: 'es-AR' });
 }
 
 interface CardFormProps {

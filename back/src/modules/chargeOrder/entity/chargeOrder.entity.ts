@@ -51,6 +51,18 @@ export class ChargeOrder {
   @JoinColumn({ name: 'planDurationId' })
   planDuration!: PlanDuration | null;
 
+  // Non-null marks this order as a prorated plan-change upgrade rather than a
+  // term purchase, and names the subscription being replaced. The confirm path
+  // branches on it: an upgrade inherits the replaced subscription's endDate
+  // instead of opening a fresh term.
+  //
+  // termMonths on a row like this is 0 — a prorated adjustment is not a
+  // purchase of N months, and the column is nullable:false so it needs a
+  // value. Payment.termMonths uses the same convention for the same reason;
+  // the two must not disagree about what a prorated charge is.
+  @Column({ type: Number, nullable: true })
+  changeFromSubscriptionId!: number | null;
+
   // 'point' (card terminal) or 'qr' (shared printed code) — see
   // ChargeOrderMethod.
   @Column({ type: 'varchar', length: 10, nullable: false })

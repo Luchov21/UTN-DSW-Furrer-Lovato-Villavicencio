@@ -81,4 +81,30 @@ export class Subscription {
   // subscription is recorded as having cost.
   @Column({ type: 'decimal', precision: 10, scale: 2, nullable: true })
   soldPrice?: number | null;
+
+  // The plan the member's NEXT term opens on. Set by a scheduled downgrade,
+  // which costs nothing and changes nothing today; read and cleared by
+  // subscriptionService.renew when the next term actually begins. Null is the
+  // normal state — a downgrade is the only thing that ever sets it.
+  //
+  // Deliberately a bare column with no ManyToOne relation, like
+  // Payment.registeredById elsewhere in this codebase: the renewal path looks
+  // the plan up explicitly, and a fourth eager relation would make every
+  // joined subscription row heavier for a field almost every row leaves null.
+  @Column({ type: Number, nullable: true })
+  scheduledPlanId?: number | null;
+
+  // The subscription this row replaced through a PAID plan change. It answers
+  // two questions at once, which is why it is one column and not two flags:
+  // non-null means "a change was already applied in this term" (one change per
+  // term is the rule), and following it once gives the ORIGINAL term's
+  // startDate, which is what the 30-day lock must measure from — this row's
+  // own startDate is today, and measuring from it would reset the lock.
+  //
+  // Because a second change in the same term is refused, this chain is NEVER
+  // longer than one hop. findChangeContext follows it exactly once and does
+  // not loop; if the one-change rule is ever relaxed, that is the code that
+  // has to change.
+  @Column({ type: Number, nullable: true })
+  changedFromSubscriptionId?: number | null;
 }

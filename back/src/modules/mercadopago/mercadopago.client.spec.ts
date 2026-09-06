@@ -126,12 +126,34 @@ describe('MercadoPagoClient', () => {
   });
 
   describe('MercadoPagoClient.chargeCardToken', () => {
-    beforeEach(() => {
-      orderCreate.mockReset();
+    let fetchMock: jest.Mock;
+    const originalFetch = global.fetch;
+
+    // chargeOnlineOrder talks to POST /v1/orders via raw fetch, not the
+    // SDK's Order client (see its own doc comment: the SDK's error parser
+    // silently drops the `{ errors: [...] }` shape this endpoint uses for
+    // validation failures) — so these tests mock global.fetch, not
+    // orderCreate.
+    function mockOrderFetch(status: number, body: unknown): void {
+      fetchMock = jest.fn().mockResolvedValue({
+        ok: status >= 200 && status < 300,
+        status,
+        json: () => Promise.resolve(body),
+      });
+      global.fetch = fetchMock as unknown as typeof fetch;
+    }
+
+    function sentBody(): Record<string, unknown> {
+      const init = fetchMock.mock.calls[0][1] as RequestInit;
+      return JSON.parse(init.body as string) as Record<string, unknown>;
+    }
+
+    afterEach(() => {
+      global.fetch = originalFetch;
     });
 
     it('sends an online order with the token, amount and payment method', async () => {
-      orderCreate.mockResolvedValue({
+      mockOrderFetch(200, {
         id: 'ORD01',
         status: 'processed',
         status_detail: 'accredited',
@@ -150,8 +172,17 @@ describe('MercadoPagoClient', () => {
         paymentTypeId: 'credit_card',
       });
 
-      expect(orderCreate).toHaveBeenCalledWith({
-        body: expect.objectContaining({
+      expect(fetchMock).toHaveBeenCalledWith(
+        'https://api.mercadopago.com/v1/orders',
+        expect.objectContaining({
+          method: 'POST',
+          headers: expect.objectContaining({
+            'X-Idempotency-Key': 'checkout-tok_abc',
+          }) as Record<string, string>,
+        }),
+      );
+      expect(sentBody()).toEqual(
+        expect.objectContaining({
           type: 'online',
           processing_mode: 'automatic',
           external_reference: 'flg-user-3-abcd1234',
@@ -169,9 +200,8 @@ describe('MercadoPagoClient', () => {
               },
             ],
           },
-        }) as Record<string, unknown>,
-        requestOptions: { idempotencyKey: 'checkout-tok_abc' },
-      });
+        }),
+      );
       expect(result).toEqual(
         expect.objectContaining({
           id: '123',
@@ -182,7 +212,7 @@ describe('MercadoPagoClient', () => {
     });
 
     it('scopes the payer to a customer when one is given', async () => {
-      orderCreate.mockResolvedValue({
+      mockOrderFetch(200, {
         id: 'ORD02',
         status: 'processed',
         transactions: { payments: [{ id: '124' }] },
@@ -198,14 +228,11 @@ describe('MercadoPagoClient', () => {
         paymentTypeId: 'credit_card',
       });
 
-      const body = orderCreate.mock.calls[0][0].body as {
-        payer: { customer_id: string };
-      };
-      expect(body.payer).toEqual({ customer_id: 'cus_1' });
+      expect(sentBody().payer).toEqual({ customer_id: 'cus_1' });
     });
 
     it('falls back to a plain email payer with no customer', async () => {
-      orderCreate.mockResolvedValue({
+      mockOrderFetch(200, {
         id: 'ORD03',
         status: 'processed',
         transactions: { payments: [{ id: '125' }] },
@@ -221,14 +248,13 @@ describe('MercadoPagoClient', () => {
         paymentTypeId: 'credit_card',
       });
 
-      const body = orderCreate.mock.calls[0][0].body as {
-        payer: { email: string };
-      };
-      expect(body.payer).toEqual({ email: 'rosa@gmail.com' });
+      expect(sentBody().payer).toEqual({ email: 'rosa@gmail.com' });
     });
 
-    it('wraps an SDK failure as MercadoPagoUnavailableError', async () => {
-      orderCreate.mockRejectedValue(new Error('network down'));
+    it('wraps a network failure as MercadoPagoUnavailableError', async () => {
+      global.fetch = jest
+        .fn()
+        .mockRejectedValue(new Error('network down')) as unknown as typeof fetch;
 
       await expect(
         client.chargeCardToken({
@@ -242,8 +268,36 @@ describe('MercadoPagoClient', () => {
       ).rejects.toBeInstanceOf(MercadoPagoUnavailableError);
     });
 
+    it('surfaces the real validation reason from a 400 errors[] response', async () => {
+      // The exact shape confirmed against the live API for this endpoint —
+      // NOT the older { message, cause: [...] } shape the SDK's own error
+      // parser understands. This is the case the raw-fetch approach exists
+      // to fix: without it, this 400 collapses to a bare "MercadoPago API
+      // error" with no indication of what was actually wrong.
+      mockOrderFetch(400, {
+        errors: [
+          {
+            code: 'property_value',
+            message: "'$.payer.customer_id' - length must be >= 1, but got 0",
+          },
+        ],
+      });
+
+      await expect(
+        client.chargeCardToken({
+          token: 'tok_abc',
+          amount: 19995,
+          externalReference: 'flg-user-3-abcd1234',
+          idempotencyKey: 'checkout-tok_abc',
+          customerId: '',
+          paymentMethodId: 'visa',
+          paymentTypeId: 'credit_card',
+        }),
+      ).rejects.toThrow(/customer_id.*length must be/);
+    });
+
     it('does not treat a rejected order as an error', async () => {
-      orderCreate.mockResolvedValue({
+      mockOrderFetch(200, {
         id: 'ORD04',
         status: 'failed',
         status_detail: 'cc_rejected_insufficient_amount',
@@ -264,7 +318,7 @@ describe('MercadoPagoClient', () => {
     });
 
     it('reports the card the payment was made with, when saving to a customer', async () => {
-      orderCreate.mockResolvedValue({
+      mockOrderFetch(200, {
         id: 'ORD05',
         status: 'processed',
         transactions: {
@@ -314,7 +368,7 @@ describe('MercadoPagoClient', () => {
     });
 
     it('does not look up a card when there is no customer to save to', async () => {
-      orderCreate.mockResolvedValue({
+      mockOrderFetch(200, {
         id: 'ORD06',
         status: 'processed',
         transactions: {
@@ -342,7 +396,7 @@ describe('MercadoPagoClient', () => {
       // The order already charged successfully by the time getCard runs — a
       // lookup failure here must degrade to "no card details", never fail
       // the whole charge and report an approved payment as an outage.
-      orderCreate.mockResolvedValue({
+      mockOrderFetch(200, {
         id: 'ORD07',
         status: 'processed',
         status_detail: 'accredited',
@@ -386,17 +440,37 @@ describe('MercadoPagoClient', () => {
   });
 
   describe('MercadoPagoClient.chargeSavedCard', () => {
+    let fetchMock: jest.Mock;
+    const originalFetch = global.fetch;
+
+    function mockOrderFetch(status: number, body: unknown): void {
+      fetchMock = jest.fn().mockResolvedValue({
+        ok: status >= 200 && status < 300,
+        status,
+        json: () => Promise.resolve(body),
+      });
+      global.fetch = fetchMock as unknown as typeof fetch;
+    }
+
+    function sentBody(): Record<string, unknown> {
+      const init = fetchMock.mock.calls[0][1] as RequestInit;
+      return JSON.parse(init.body as string) as Record<string, unknown>;
+    }
+
     beforeEach(() => {
-      orderCreate.mockReset();
       cardTokenCreate = jest.fn<
         Promise<CardTokenLike>,
         [CardTokenCreateArgs]
       >();
     });
 
+    afterEach(() => {
+      global.fetch = originalFetch;
+    });
+
     it('mints a fresh token from the saved card, then charges it as an online order', async () => {
       cardTokenCreate.mockResolvedValue({ id: 'fresh_tok_1' });
-      orderCreate.mockResolvedValue({
+      mockOrderFetch(200, {
         id: 'ORD10',
         status: 'processed',
         transactions: { payments: [{ id: '200' }] },
@@ -414,7 +488,7 @@ describe('MercadoPagoClient', () => {
       expect(cardTokenCreate).toHaveBeenCalledWith({
         body: { card_id: 'card_1', customer_id: 'cus_1' },
       });
-      const body = orderCreate.mock.calls[0][0].body as {
+      const body = sentBody() as {
         payer: { customer_id: string };
         transactions: {
           payments: Array<{ payment_method: { token: string } }>;
@@ -431,7 +505,7 @@ describe('MercadoPagoClient', () => {
 
     it('forwards the external reference to the order, when given', async () => {
       cardTokenCreate.mockResolvedValue({ id: 'fresh_tok_3' });
-      orderCreate.mockResolvedValue({
+      mockOrderFetch(200, {
         id: 'ORD12',
         status: 'processed',
         transactions: { payments: [{ id: '202' }] },
@@ -447,15 +521,12 @@ describe('MercadoPagoClient', () => {
         paymentTypeId: 'credit_card',
       });
 
-      const body = orderCreate.mock.calls[0][0].body as {
-        external_reference?: string;
-      };
-      expect(body.external_reference).toBe('flg-user-3-abcd1234');
+      expect(sentBody().external_reference).toBe('flg-user-3-abcd1234');
     });
 
     it('does not fetch card details for a renewal charge', async () => {
       cardTokenCreate.mockResolvedValue({ id: 'fresh_tok_2' });
-      orderCreate.mockResolvedValue({
+      mockOrderFetch(200, {
         id: 'ORD11',
         status: 'processed',
         transactions: {

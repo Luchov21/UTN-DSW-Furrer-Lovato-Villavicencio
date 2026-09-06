@@ -325,6 +325,13 @@ export class MercadoPagoClient {
     operation: string,
     err: unknown,
   ): MercadoPagoUnavailableError {
+    // Idempotent: chargeOnlineOrder wraps a raw-fetch failure itself (to
+    // attach the parsed `errors` array a plain network/JSON error doesn't
+    // have) before its own outer catch also calls this — without this guard
+    // the message would double-prefix itself on every such failure.
+    if (err instanceof MercadoPagoUnavailableError) {
+      return err;
+    }
     const detail = err instanceof Error ? err.message : String(err);
     // status/causes are MP's own HTTP status code and structured validation
     // feedback about the REQUEST we sent — not secrets, and the only way to
@@ -536,6 +543,15 @@ export class MercadoPagoClient {
    * the order response back into `MpPaymentResult`, the same shape the
    * classic Payments API path this replaces already returned, so neither
    * caller needs to change how it reads the result.
+   *
+   * Talks to `POST /v1/orders` via raw `fetch`, not the SDK's `Order`
+   * client — confirmed against the SDK's own source
+   * (`utils/errors/index.js`'s `MercadoPagoError` constructor only reads
+   * `body.message`/`body.error`/`body.cause`) that a validation failure on
+   * this endpoint comes back as `{ errors: [...] }`, a newer shape the SDK's
+   * error parser doesn't recognize — it silently drops that array and every
+   * caller sees a bare, useless "MercadoPago API error". Parsing the raw
+   * response ourselves is the only way to surface the real reason.
    */
   private async chargeOnlineOrder(input: {
     token: string;
@@ -550,36 +566,68 @@ export class MercadoPagoClient {
     /** Only the new-card checkout path needs the extra getCard round trip. */
     includeCardDetails: boolean;
   }): Promise<MpPaymentResult> {
-    const sdkConfig = this.getSdkConfig();
+    this.getSdkConfig();
+    const accessToken = this.config.accessToken as string;
     const amountStr = input.amount.toFixed(2);
     try {
-      const orderClient = new Order(sdkConfig);
-      const order = await orderClient.create({
-        body: {
-          type: 'online',
-          processing_mode: 'automatic',
-          external_reference: input.externalReference,
-          total_amount: amountStr,
-          description: input.description,
-          payer: input.customerId
-            ? { customer_id: input.customerId }
-            : { email: input.payerEmail },
-          transactions: {
-            payments: [
-              {
-                amount: amountStr,
-                payment_method: {
-                  id: input.paymentMethodId,
-                  type: input.paymentTypeId,
-                  token: input.token,
-                  installments: 1,
-                },
-              },
-            ],
+      let response: Response;
+      try {
+        response = await fetch('https://api.mercadopago.com/v1/orders', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+            'X-Idempotency-Key': input.idempotencyKey,
           },
-        },
-        requestOptions: { idempotencyKey: input.idempotencyKey },
-      });
+          body: JSON.stringify({
+            type: 'online',
+            processing_mode: 'automatic',
+            external_reference: input.externalReference,
+            total_amount: amountStr,
+            description: input.description,
+            payer: input.customerId
+              ? { customer_id: input.customerId }
+              : { email: input.payerEmail },
+            transactions: {
+              payments: [
+                {
+                  amount: amountStr,
+                  payment_method: {
+                    id: input.paymentMethodId,
+                    type: input.paymentTypeId,
+                    token: input.token,
+                    installments: 1,
+                  },
+                },
+              ],
+            },
+          }),
+        });
+      } catch (err) {
+        throw this.wrapError('chargeOnlineOrder', err);
+      }
+
+      interface RawOrderErrorItem {
+        code?: string;
+        message?: string;
+      }
+      const responseBody: SdkOrderResponse & { errors?: RawOrderErrorItem[] } =
+        await response.json().catch(() => ({}) as SdkOrderResponse);
+      if (!response.ok) {
+        const errors = Array.isArray(responseBody.errors)
+          ? responseBody.errors
+          : [];
+        const message =
+          errors.length > 0
+            ? errors.map((e) => e.message).filter(Boolean).join('; ')
+            : undefined;
+        throw this.wrapError('chargeOnlineOrder', {
+          message,
+          status: response.status,
+          causes: errors,
+        });
+      }
+      const order = responseBody;
 
       const txPayment = order.transactions?.payments?.[0];
       if (!txPayment?.id) {

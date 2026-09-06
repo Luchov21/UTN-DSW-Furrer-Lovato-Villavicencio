@@ -592,6 +592,105 @@ describe('subscriptionService', () => {
     });
   });
 
+  describe('findChangeContext', () => {
+    it('reports the row as unchanged when it was never changed from another', async () => {
+      subscriptionRepository.findOne.mockResolvedValue({
+        id: 10,
+        state: 'activa',
+        startDate: '2026-01-01',
+        endDate: '2026-03-31',
+        changedFromSubscriptionId: null,
+        plan: { id: 1, price: 6000, numDays: 30 },
+      });
+
+      const context = await service.findChangeContext(7);
+
+      expect(context?.current).toEqual({
+        plan: { id: 1, price: 6000, numDays: 30 },
+        state: 'activa',
+        termStartDate: '2026-01-01',
+        endDate: '2026-03-31',
+        alreadyChanged: false,
+      });
+    });
+
+    it('reads the ORIGINAL term start through changedFromSubscriptionId', async () => {
+      // The upgraded row started today; the lock must still measure from 01/01,
+      // or an upgrade would reset its own 30-day lock.
+      subscriptionRepository.findOne
+        .mockResolvedValueOnce({
+          id: 11,
+          state: 'activa',
+          startDate: '2026-02-15',
+          endDate: '2026-03-31',
+          changedFromSubscriptionId: 10,
+          plan: { id: 2, price: 9000, numDays: 30 },
+        })
+        .mockResolvedValueOnce({ id: 10, startDate: '2026-01-01' });
+
+      const context = await service.findChangeContext(7);
+
+      expect(context?.current.termStartDate).toBe('2026-01-01');
+      expect(context?.current.alreadyChanged).toBe(true);
+    });
+
+    it('returns null when the member has no live subscription', async () => {
+      subscriptionRepository.findOne.mockResolvedValue(null);
+      expect(await service.findChangeContext(7)).toBeNull();
+    });
+  });
+
+  describe('replaceActiveSubscription with an inherited end date', () => {
+    it('keeps the end date it is given instead of opening a fresh term', async () => {
+      const manager = {
+        find: jest.fn().mockResolvedValue([
+          { id: 10, state: 'activa', endDate: '2026-03-31', scheduledPlanId: 5 },
+        ]),
+        create: jest.fn((_entity, data) => data),
+        save: jest.fn((row) => Promise.resolve({ id: 11, ...row })),
+      } as unknown as EntityManager;
+
+      const created = await service.replaceActiveSubscription(manager, {
+        userId: 7,
+        planId: 2,
+        term: { months: 1, numDays: 30, price: 9000, planDurationId: null },
+        soldPrice: 9000,
+        endDate: '2026-03-31' as unknown as Date,
+        changedFromSubscriptionId: 10,
+      });
+
+      expect(created).toMatchObject({
+        endDate: '2026-03-31',
+        changedFromSubscriptionId: 10,
+        planDurationId: null,
+      });
+    });
+
+    it('clears a scheduled downgrade on the row it replaces', async () => {
+      // The member paid to upgrade; a downgrade they scheduled earlier must not
+      // survive onto the plan they just bought.
+      const cancelled = {
+        id: 10, state: 'activa', endDate: '2026-03-31', scheduledPlanId: 5,
+      };
+      const manager = {
+        find: jest.fn().mockResolvedValue([cancelled]),
+        create: jest.fn((_entity, data) => data),
+        save: jest.fn((row) => Promise.resolve(row)),
+      } as unknown as EntityManager;
+
+      await service.replaceActiveSubscription(manager, {
+        userId: 7,
+        planId: 2,
+        term: { months: 1, numDays: 30, price: 9000, planDurationId: null },
+        soldPrice: 9000,
+        endDate: '2026-03-31' as unknown as Date,
+        changedFromSubscriptionId: 10,
+      });
+
+      expect(cancelled.scheduledPlanId).toBeNull();
+    });
+  });
+
   describe('setAutoRenew', () => {
     it('flips autoRenew on the subscription and saves it', async () => {
       subscriptionRepository.findOne.mockResolvedValue({

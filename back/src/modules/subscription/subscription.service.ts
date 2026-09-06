@@ -19,6 +19,7 @@ import { SubscriptionState } from './enum/subscription-state.enum';
 import { PlanService } from '../plan/plan.service';
 import { UserService } from '../user/user.service';
 import { ResolvedTerm } from '../plan/plan-duration.rules';
+import type { CurrentTerm } from './plan-change.rules';
 import {
   dayAfter,
   isCurrentOn,
@@ -156,6 +157,11 @@ export class subscriptionService {
       // by the term's months, so recording the list price here would report
       // revenue the gym never billed.
       soldPrice: number;
+      // Set only by a prorated plan change: the new subscription inherits the
+      // replaced term's endDate instead of opening a fresh period, which is
+      // what makes an upgrade cost only the difference.
+      endDate?: Date;
+      changedFromSubscriptionId?: number;
     },
   ): Promise<Subscription> {
     const live = await manager.find(Subscription, {
@@ -187,18 +193,29 @@ export class subscriptionService {
 
     for (const previous of live) {
       previous.state = SubscriptionState.CANCELLED;
+      // A downgrade scheduled on the row being replaced must not survive onto
+      // the plan the member just paid to move to.
+      previous.scheduledPlanId = null;
       await manager.save(previous);
     }
 
     // subscriptionPeriod, not a local calculation: a subscription created here
     // and one created by changePlan must not get their dates computed
-    // differently — only the `from` argument varies here.
+    // differently — only the `from` argument varies here. Unless the caller
+    // supplies an endDate (a prorated plan change), in which case the new row
+    // inherits the replaced term's end instead of opening a fresh one.
+    const period = input.endDate
+      ? { startDate: toDateOnly(new Date()) as unknown as Date, endDate: input.endDate }
+      : subscriptionPeriod(input.term.numDays, from);
+
     const created = manager.create(Subscription, {
       userId: input.userId,
       planId: input.planId,
-      planDurationId: input.term.planDurationId,
+      // A prorated change buys no term, so it has no duration to point at.
+      planDurationId: input.endDate ? null : input.term.planDurationId,
       soldPrice: input.soldPrice,
-      ...subscriptionPeriod(input.term.numDays, from),
+      changedFromSubscriptionId: input.changedFromSubscriptionId ?? null,
+      ...period,
       state: SubscriptionState.ACTIVE,
       deleted: false,
     });
@@ -339,6 +356,46 @@ export class subscriptionService {
     return isCurrentOn(subscription.endDate, toDateOnly(new Date()))
       ? subscription
       : null;
+  }
+
+  // Everything assessChange needs about the member's live term, and the row
+  // itself for the caller to act on. Looks at PAUSED and PENDING too, unlike
+  // findActiveForUser: a paused member asking to change plans must be told
+  // that their plan is paused ('not_current'), not that they have no plan.
+  async findChangeContext(
+    userId: number,
+  ): Promise<{ subscription: Subscription; current: CurrentTerm } | null> {
+    const live = await this.subscriptionRepository.findOne({
+      where: [
+        { userId, state: SubscriptionState.ACTIVE, deleted: false },
+        { userId, state: SubscriptionState.PAUSED, deleted: false },
+        { userId, state: SubscriptionState.PENDING, deleted: false },
+      ],
+      relations: { plan: true },
+      order: { id: 'DESC' },
+    });
+
+    if (!live) return null;
+
+    // Exactly one hop, never a walk — see Subscription.changedFromSubscriptionId.
+    let termStartDate: Date | string = live.startDate;
+    if (live.changedFromSubscriptionId != null) {
+      const origin = await this.subscriptionRepository.findOne({
+        where: { id: live.changedFromSubscriptionId },
+      });
+      if (origin) termStartDate = origin.startDate;
+    }
+
+    return {
+      subscription: live,
+      current: {
+        plan: live.plan,
+        state: live.state,
+        termStartDate,
+        endDate: live.endDate,
+        alreadyChanged: live.changedFromSubscriptionId != null,
+      },
+    };
   }
 
   // Moves subscriptions that have run out to INACTIVE, nightly.

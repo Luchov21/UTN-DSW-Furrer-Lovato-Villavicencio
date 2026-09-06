@@ -51,6 +51,14 @@ export class Payment {
   @Column({ type: String, nullable: true, unique: true, length: 64 })
   mpPaymentId?: string | null;
 
+  // The Orders API order id this payment belongs to, when it came from one
+  // (online checkout or the renewal cron) — not set for a classic Payments
+  // API payment or a cash/manual one. RefundService reads this to decide
+  // whether a refund needs POST /v1/orders/{id}/refund instead of the
+  // classic endpoint.
+  @Column({ type: String, nullable: true, length: 64 })
+  mpOrderId?: string | null;
+
   // How many months this payment bought, and what a single month cost at the
   // time. Both are snapshots: a refund computed years later must use the prices
   // that were actually agreed, not whatever the plan costs by then.

@@ -8,6 +8,7 @@ import {
   Patch,
   Query,
   ParseIntPipe,
+  NotFoundException,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { SkipThrottle } from '@nestjs/throttler';
@@ -16,12 +17,15 @@ import { UserService } from './user.service';
 import { UpdateProfileDto } from './dto/update-profile-dto';
 import { AdminUpdateUserDto } from './dto/admin-update-user-dto';
 import { AdminCreateUserDto } from './dto/admin-create-user-dto';
+import { CredentialsSlipDto } from './dto/credentials-slip-dto';
 import { Auth } from '../../auth/decorators/auth.decorator';
 import { AllowIncompleteProfile } from '../../auth/decorators/allow-incomplete-profile.decorator';
 import { AllowTemporaryPassword } from '../../auth/decorators/allow-temporary-password.decorator';
 import { ActiveUser } from '../../common/decorators/active-user.decorator';
 import type { UserActiveInterface } from '../../common/interfaces/user-active.interface';
 import { Role } from '../../common/enum/role.enum';
+import { ReceiptPrintService } from '../receipt/receipt-print.service';
+import { MercadoPagoConfig } from '../mercadopago/mercadopago.config';
 
 // Number('abc') is NaN, which used to travel down as a filter that silently
 // matched nothing and was then dropped. An unparseable value is now simply
@@ -40,7 +44,11 @@ const toId = (raw?: string): number | undefined => {
 // Not rate limited — see auth.throttle.ts.
 @SkipThrottle(SKIP_ALL_THROTTLERS)
 export class UserController {
-  constructor(private userService: UserService) {}
+  constructor(
+    private userService: UserService,
+    private readonly receiptPrintService: ReceiptPrintService,
+    private readonly mercadoPagoConfig: MercadoPagoConfig,
+  ) {}
 
   // Front-desk creation of a member who may have neither email nor password.
   // The older UsersDto is still used by auth.service.register (via
@@ -121,5 +129,39 @@ export class UserController {
   @Patch('/restore/:id')
   restoreUsers(@Param('id', ParseIntPipe) id: number) {
     return this.userService.restoreUsers(id);
+  }
+
+  // Prints the front-desk credentials slip on the Point terminal. The
+  // password travels in the body because it is never stored in the clear —
+  // the class-level @Auth(Role.ADMIN) already covers it, so no method-level
+  // @Auth is added here (that would replace, not add to, the guard list).
+  @Post('/:id/credentials-slip')
+  async printCredentialsSlip(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: CredentialsSlipDto,
+  ) {
+    const user = await this.userService.findUser(id);
+    if (!user) {
+      throw new NotFoundException(`El usuario con ID: ${id} no existe.`);
+    }
+    if (!this.mercadoPagoConfig.pointTerminalId) {
+      return { printStatus: 'not_configured' };
+    }
+
+    const result = await this.receiptPrintService.printCredentialsSlip({
+      userId: user.id,
+      memberName: `${user.name} ${user.surname ?? ''}`.trim(),
+      dni: user.dni ?? null,
+      username: user.email,
+      password: dto.password,
+      planName: dto.planName,
+      termLabel: dto.termLabel,
+      terminalId: this.mercadoPagoConfig.pointTerminalId,
+    });
+
+    return {
+      printStatus: result.status,
+      ...(result.errorMessage ? { printError: result.errorMessage } : {}),
+    };
   }
 }

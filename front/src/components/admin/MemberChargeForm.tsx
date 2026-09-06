@@ -53,7 +53,7 @@ const MemberChargeForm = ({
     plans, plansError, planId, setPlanId, months, setMonths,
     options, resolvedPrice, amountText, setAmountText, autoRenewedToday,
     method, setMethod, orderView, isCreatingOrder, orderError,
-    isSaving, formError, success, submit, cancelOrder, resetOrder,
+    isSaving, formError, success, printWarning, submit, cancelOrder, resetOrder,
   } = useMemberCharge(selectedUser, onCharged);
 
   // While a point/qr order is pendiente the terminal (or the caja) is holding a
@@ -182,6 +182,7 @@ const MemberChargeForm = ({
       <FormAlert type="error" message={orderError} />
       <FormAlert type="error" message={formError} />
       <FormAlert type="success" message={success} />
+      <FormAlert type="warning" message={printWarning} />
 
       {orderView ? (
         <PendingOrderView

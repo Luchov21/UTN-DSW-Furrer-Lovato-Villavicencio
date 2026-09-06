@@ -32,6 +32,9 @@ export const findCompleteProfileFormError = (
     if (!/^\d+$/.test(dni) || Number(dni) <= 0) {
       return 'El DNI tiene que ser un número entero.';
     }
+    if (dni.length < 7 || dni.length > 8) {
+      return 'El DNI tiene que tener 7 u 8 dígitos.';
+    }
   }
 
   const phone = form.phone.trim();

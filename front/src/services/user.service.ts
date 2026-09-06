@@ -182,3 +182,32 @@ export const adminCreateUser = async (
     });
   }
 };
+
+export interface CredentialsSlipPayload {
+  password: string;
+  planName?: string;
+  termLabel?: string;
+}
+
+export interface CredentialsSlipResult {
+  printStatus: 'sent' | 'error' | 'not_configured';
+  printError?: string;
+}
+
+export const printCredentialsSlip = async (
+  userId: number,
+  payload: CredentialsSlipPayload,
+): Promise<CredentialsSlipResult> => {
+  try {
+    const { data } = await api.post<CredentialsSlipResult>(
+      `/user/${userId}/credentials-slip`,
+      payload,
+    );
+    return data;
+  } catch (error) {
+    throw new Error(
+      getErrorMessage(error, 'No se pudo imprimir el comprobante.'),
+      { cause: error },
+    );
+  }
+};

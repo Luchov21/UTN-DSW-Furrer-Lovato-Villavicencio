@@ -18,11 +18,19 @@ import {
   type PasswordChangeForm,
 } from './complete-profile';
 
+interface CompleteProfileFormProps {
+  // Where to send the member once both gates are clear. Defaults to
+  // /dashboard for every caller that doesn't come from checkout.
+  returnTo?: string;
+}
+
 // Renders whichever of the two gates is still closed — see
 // CompleteProfileSection.tsx for when each one applies. A walk-in created
 // without a phone and still on the front-desk password sees both sections at
 // once and clears both gates in a single submit.
-const CompleteProfileForm = () => {
+const CompleteProfileForm = ({
+  returnTo = '/dashboard',
+}: CompleteProfileFormProps) => {
   const navigate = useNavigate();
   const {
     user,
@@ -90,7 +98,7 @@ const CompleteProfileForm = () => {
         updateUser(data.user);
       }
 
-      navigate('/dashboard', { replace: true });
+      navigate(returnTo, { replace: true });
     } catch (err) {
       setError(
         err instanceof Error

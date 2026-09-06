@@ -46,6 +46,9 @@ export const findNewMemberFormError = (form: NewMemberForm): string | null => {
   if (!/^\d+$/.test(dni) || Number(dni) <= 0) {
     return 'El DNI tiene que ser un número entero.';
   }
+  if (dni.length < 7 || dni.length > 8) {
+    return 'El DNI tiene que tener 7 u 8 dígitos.';
+  }
   if (!form.name.trim() || !form.surname.trim()) {
     return 'Nombre y apellido son obligatorios.';
   }

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Loader2, AlertCircle } from 'lucide-react';
 import Card from '../common/Card';
 import Button from '../common/Button';
@@ -6,10 +7,7 @@ import FormAlert from '../common/FormAlert';
 import PlanCard from '../plans/PlanCard';
 import { enrichBackendPlan, type MembershipPlan } from '../plans/plans.data';
 import { getPlans } from '../../services/plan.service';
-import {
-  getMySubscription,
-  changePlan,
-} from '../../services/subscription.service';
+import { getMySubscription } from '../../services/subscription.service';
 import type { Subscription } from '../../types/subscription';
 import { formatDateOnly } from '../../lib/date';
 
@@ -21,13 +19,13 @@ const stateBadge: Record<string, string> = {
 };
 
 const PlanSection = () => {
+  const navigate = useNavigate();
   const [plans, setPlans] = useState<MembershipPlan[]>([]);
   const [subscription, setSubscription] = useState<Subscription | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
 
   const [pendingPlan, setPendingPlan] = useState<MembershipPlan | null>(null);
-  const [isChanging, setIsChanging] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionSuccess, setActionSuccess] = useState<string | null>(null);
 
@@ -76,24 +74,9 @@ const PlanSection = () => {
     setPendingPlan(plan);
   };
 
-  const confirmChange = async () => {
+  const confirmChange = () => {
     if (!pendingPlan?.id) return;
-    setIsChanging(true);
-    setActionError(null);
-    try {
-      const updated = await changePlan(pendingPlan.id);
-      setSubscription(updated);
-      setActionSuccess(
-        `Tu cambio de plan a "${pendingPlan.name}" quedó pendiente. Acercate al gimnasio para abonarlo: el plan se activa cuando registremos tu pago, y mientras tanto seguís con tu plan actual.`,
-      );
-      setPendingPlan(null);
-    } catch (err) {
-      setActionError(
-        err instanceof Error ? err.message : 'No se pudo cambiar de plan.',
-      );
-    } finally {
-      setIsChanging(false);
-    }
+    navigate(`/checkout?plan=${pendingPlan.id}&months=1`);
   };
 
   if (isLoading) {
@@ -203,24 +186,15 @@ const PlanSection = () => {
                 "{pendingPlan.name}"
               </span>{' '}
               ({pendingPlan.price}
-              {pendingPlan.period}). El cambio queda registrado como pendiente:
-              el plan se activa cuando abones en el gimnasio y registremos tu
-              pago, y mientras tanto seguís con tu plan actual.
+              {pendingPlan.period}). Te llevamos al checkout para completar el
+              pago; el cambio se aplica cuando se acredite.
             </p>
 
             <div className="mt-6 flex gap-3">
-              <Button
-                onClick={confirmChange}
-                disabled={isChanging}
-                className="flex-1"
-              >
-                {isChanging ? 'Confirmando...' : 'Confirmar'}
+              <Button onClick={confirmChange} className="flex-1">
+                Confirmar
               </Button>
-              <Button
-                variant="secondary"
-                onClick={() => setPendingPlan(null)}
-                disabled={isChanging}
-              >
+              <Button variant="secondary" onClick={() => setPendingPlan(null)}>
                 Cancelar
               </Button>
             </div>

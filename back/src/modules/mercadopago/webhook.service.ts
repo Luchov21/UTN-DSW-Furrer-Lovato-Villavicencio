@@ -1,5 +1,9 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { MercadoPagoClient, MpPaymentResult } from './mercadopago.client';
+import {
+  MercadoPagoClient,
+  MpPaymentResult,
+  mapOrderStatusToPaymentStatus,
+} from './mercadopago.client';
 import { PaymentService } from '../payment/payment.service';
 import { Payment } from '../payment/entity/payment.entity';
 import { Subscription } from '../subscription/entity/subscription.entity';
@@ -103,10 +107,11 @@ export class WebhookService {
       }
       return {
         id: order.paymentId,
-        status: order.status === 'processed' ? 'approved' : order.status,
+        status: mapOrderStatusToPaymentStatus(order.status),
         statusDetail: order.statusDetail,
         transactionAmount: order.totalPaidAmount,
         externalReference: order.externalReference,
+        mpOrderId: order.id,
       };
     }
     if (type === 'payment') {
@@ -212,6 +217,7 @@ export class WebhookService {
         amount: resolved.amount,
         payMethod: resolved.payMethod,
         registeredById: resolved.registeredById ?? null,
+        mpOrderId: payment.mpOrderId,
       });
     } catch (err) {
       // Rethrown, not swallowed: Mercado Pago has already taken the money, so

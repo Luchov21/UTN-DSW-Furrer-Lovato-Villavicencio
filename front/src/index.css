@@ -36,3 +36,9 @@ h3,
 h4 {
   font-family: var(--font-display);
 }
+
+@keyframes checkmark {
+  to {
+    stroke-dashoffset: 0;
+  }
+}

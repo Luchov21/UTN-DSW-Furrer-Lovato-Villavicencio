@@ -12,4 +12,5 @@ export class MercadoPagoPaymentDto {
   // payment — not hardcoded here since the caller already knows which.
   payMethod!: string;
   registeredById?: number | null;
+  mpOrderId?: string | null;
 }

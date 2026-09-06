@@ -4,10 +4,16 @@ import Card from '../common/Card';
 import Button from '../common/Button';
 import FormAlert from '../common/FormAlert';
 import ConfirmDialog from '../admin/ConfirmDialog';
-import SavedCardForm from './SavedCardForm';
+import CardForm from '../checkout/CardForm';
+import RenewalPrompt from './RenewalPrompt';
 import { formatCardLabel, cardExpiryWarning } from './saved-card';
+import { needsRenewal } from './payments';
 import { getMyPayments } from '../../services/payment.service';
-import { getMySavedCard, deleteCard } from '../../services/savedCard.service';
+import {
+  getMySavedCard,
+  deleteCard,
+  saveCard,
+} from '../../services/savedCard.service';
 import {
   getMySubscription,
   setAutoRenew,
@@ -25,6 +31,11 @@ const stateBadge: Record<string, string> = {
   reembolsado: 'bg-text-muted/10 text-text-muted border-border',
 };
 
+const PAGE_SIZE = 5;
+
+// Fallback ARS amount for a member with no active plan; see cardFormAmount.
+const DEFAULT_CARD_AMOUNT = 10000;
+
 const PaymentsSection = () => {
   const [payments, setPayments] = useState<Payment[]>([]);
   const [card, setCard] = useState<SavedCard | null>(null);
@@ -35,10 +46,12 @@ const PaymentsSection = () => {
   const [showCardForm, setShowCardForm] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [isSavingCard, setIsSavingCard] = useState(false);
   const [cardError, setCardError] = useState<string | null>(null);
   const [cardSuccess, setCardSuccess] = useState<string | null>(null);
   const [isTogglingAutoRenew, setIsTogglingAutoRenew] = useState(false);
   const [autoRenewError, setAutoRenewError] = useState<string | null>(null);
+  const [pageOffset, setPageOffset] = useState(0);
 
   // Every setState below lives in an async callback, so this effect only
   // starts the requests; Promise.allSettled lets one failing source leave the
@@ -70,6 +83,25 @@ const PaymentsSection = () => {
     setShowCardForm(false);
     setCardError(null);
     setCardSuccess('Tarjeta guardada correctamente.');
+  };
+
+  const handleTokenSaved = async (token: string) => {
+    // Reentrancy guard: CardForm's onToken fires as soon as the Brick's
+    // synchronous onSubmit returns, well before this call finishes — without
+    // this check a double-click could fire two concurrent saves.
+    if (isSavingCard) return;
+    setIsSavingCard(true);
+    setCardError(null);
+    try {
+      const savedCard = await saveCard(token);
+      handleCardSaved(savedCard);
+    } catch (err) {
+      setCardError(
+        err instanceof Error ? err.message : 'No se pudo guardar la tarjeta.',
+      );
+    } finally {
+      setIsSavingCard(false);
+    }
   };
 
   const confirmDeleteCard = async () => {
@@ -113,62 +145,21 @@ const PaymentsSection = () => {
 
   const expiryWarning = card ? cardExpiryWarning(card, new Date()) : null;
 
+  // A member with no active plan still needs a valid amount for the Brick to
+  // price installments against; their plan price is the honest default and
+  // DEFAULT_CARD_AMOUNT covers the no-subscription case.
+  const cardFormAmount = subscription?.plan?.price ?? DEFAULT_CARD_AMOUNT;
+
+  const pagedPayments = payments.slice(pageOffset, pageOffset + PAGE_SIZE);
+  const paymentsFrom = payments.length === 0 ? 0 : pageOffset + 1;
+  const paymentsTo = Math.min(pageOffset + PAGE_SIZE, payments.length);
+  const hasPreviousPage = pageOffset > 0;
+  const hasNextPage = pageOffset + PAGE_SIZE < payments.length;
+
   return (
     <div className="space-y-6">
-      {isLoading ? (
-        <div className="flex h-32 items-center justify-center">
-          <Loader2 className="h-6 w-6 animate-spin text-primary" />
-        </div>
-      ) : error ? (
-        <Card className="text-center hover:translate-y-0 hover:shadow-lg">
-          <p className="text-sm text-red-400">{error}</p>
-        </Card>
-      ) : payments.length === 0 ? (
-        <Card className="text-center hover:translate-y-0 hover:shadow-lg">
-          <Receipt className="mx-auto h-10 w-10 text-text-muted" />
-          <p className="mt-3 font-body text-sm text-text-muted">
-            Todavía no tenés pagos registrados. Los pagos presenciales que
-            registre el gimnasio van a aparecer acá.
-          </p>
-        </Card>
-      ) : (
-        <div className="overflow-x-auto rounded-2xl border border-border">
-          <table className="w-full min-w-max text-left text-sm">
-            <thead className="bg-surface">
-              <tr>
-                {['Fecha', 'Monto', 'Método', 'Estado'].map((h) => (
-                  <th
-                    key={h}
-                    className="px-4 py-3 font-body text-xs font-semibold uppercase tracking-wide text-text-muted"
-                  >
-                    {h}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border">
-              {payments.map((p) => (
-                <tr key={p.id} className="bg-background font-body text-text">
-                  <td className="px-4 py-3">
-                    {formatDateOnly(p.date.slice(0, 10))}
-                  </td>
-                  <td className="px-4 py-3">${formatPriceDisplay(p.amount)}</td>
-                  <td className="px-4 py-3 capitalize">{p.payMethod}</td>
-                  <td className="px-4 py-3">
-                    <span
-                      className={`rounded-full border px-2 py-0.5 text-xs font-semibold capitalize ${
-                        stateBadge[p.state?.toLowerCase() ?? ''] ??
-                        stateBadge.completado
-                      }`}
-                    >
-                      {p.state}
-                    </span>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+      {!isLoading && needsRenewal(subscription) && subscription && (
+        <RenewalPrompt subscription={subscription} />
       )}
 
       <Card className="hover:translate-y-0 hover:shadow-lg">
@@ -238,12 +229,24 @@ const PaymentsSection = () => {
 
         {!isLoading && (showCardForm || !card) && (
           <div className="mt-4">
-            <SavedCardForm onSaved={handleCardSaved} />
+            {isSavingCard && (
+              <div className="mb-3 flex items-center gap-2 text-sm text-text-muted">
+                <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                Guardando tarjeta...
+              </div>
+            )}
+            <CardForm
+              amount={cardFormAmount}
+              onToken={(card) => void handleTokenSaved(card.token)}
+              onError={setCardError}
+              isBusy={isSavingCard}
+            />
             {card && (
               <Button
                 variant="secondary"
                 size="sm"
                 className="mt-3"
+                disabled={isSavingCard}
                 onClick={() => setShowCardForm(false)}
               >
                 Cancelar
@@ -252,6 +255,103 @@ const PaymentsSection = () => {
           </div>
         )}
       </Card>
+
+      <div>
+        <h3 className="font-display text-lg font-semibold text-text">
+          Historial de pagos
+        </h3>
+
+        {isLoading ? (
+          <div className="flex h-32 items-center justify-center">
+            <Loader2 className="h-6 w-6 animate-spin text-primary" />
+          </div>
+        ) : error ? (
+          <Card className="mt-4 text-center hover:translate-y-0 hover:shadow-lg">
+            <p className="text-sm text-red-400">{error}</p>
+          </Card>
+        ) : payments.length === 0 ? (
+          <Card className="mt-4 text-center hover:translate-y-0 hover:shadow-lg">
+            <Receipt className="mx-auto h-10 w-10 text-text-muted" />
+            <p className="mt-3 font-body text-sm text-text-muted">
+              Todavía no tenés pagos registrados. Acá van a aparecer tus pagos
+              online y los que registre el gimnasio.
+            </p>
+          </Card>
+        ) : (
+          <>
+            <div className="mt-4 overflow-x-auto rounded-2xl border border-border">
+              <table className="w-full min-w-max text-left text-sm">
+                <thead className="bg-surface">
+                  <tr>
+                    {['Fecha', 'Monto', 'Método', 'Estado'].map((h) => (
+                      <th
+                        key={h}
+                        className="px-4 py-3 font-body text-xs font-semibold uppercase tracking-wide text-text-muted"
+                      >
+                        {h}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {pagedPayments.map((p) => (
+                    <tr
+                      key={p.id}
+                      className="bg-background font-body text-text"
+                    >
+                      <td className="px-4 py-3">
+                        {formatDateOnly(p.date.slice(0, 10))}
+                      </td>
+                      <td className="px-4 py-3">
+                        ${formatPriceDisplay(p.amount)}
+                      </td>
+                      <td className="px-4 py-3 capitalize">{p.payMethod}</td>
+                      <td className="px-4 py-3">
+                        <span
+                          className={`rounded-full border px-2 py-0.5 text-xs font-semibold capitalize ${
+                            stateBadge[p.state?.toLowerCase() ?? ''] ??
+                            stateBadge.completado
+                          }`}
+                        >
+                          {p.state}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {payments.length > PAGE_SIZE && (
+              <div className="mt-3 flex items-center justify-between">
+                <p className="text-xs text-text-muted">
+                  Mostrando {paymentsFrom}-{paymentsTo} de {payments.length}
+                </p>
+                <div className="flex gap-2">
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    disabled={!hasPreviousPage}
+                    onClick={() =>
+                      setPageOffset(Math.max(0, pageOffset - PAGE_SIZE))
+                    }
+                  >
+                    Anterior
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    disabled={!hasNextPage}
+                    onClick={() => setPageOffset(pageOffset + PAGE_SIZE)}
+                  >
+                    Siguiente
+                  </Button>
+                </div>
+              </div>
+            )}
+          </>
+        )}
+      </div>
 
       {confirmingDelete && (
         <ConfirmDialog

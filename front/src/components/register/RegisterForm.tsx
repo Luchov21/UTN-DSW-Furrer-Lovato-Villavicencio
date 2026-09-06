@@ -8,7 +8,20 @@ import { useAuth } from '../../context/useAuth';
 
 const EMAIL_REGEX = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
 
-const RegisterForm = () => {
+interface RegisterFormProps {
+  // Lets an embedding flow (checkout) take over where the member lands next
+  // instead of the default redirect home. Callers that don't pass it keep
+  // the existing behavior unchanged.
+  onSuccess?: () => void;
+  // Forwarded to GoogleAuthButton. Callers that don't pass it keep the
+  // existing behavior unchanged.
+  onIncompleteProfile?: () => void;
+}
+
+const RegisterForm = ({
+  onSuccess,
+  onIncompleteProfile,
+}: RegisterFormProps) => {
   const navigate = useNavigate();
   const { register } = useAuth();
   const [dni, setDni] = useState('');
@@ -38,8 +51,13 @@ const RegisterForm = () => {
     if (!cleanDni) {
       newErrors.dni = 'El DNI es requerido.';
       isValid = false;
-    } else if (isNaN(numericDni) || numericDni <= 0 || cleanDni.length < 6) {
-      newErrors.dni = 'Ingresa un número de DNI válido.';
+    } else if (
+      isNaN(numericDni) ||
+      numericDni <= 0 ||
+      cleanDni.length < 7 ||
+      cleanDni.length > 8
+    ) {
+      newErrors.dni = 'El DNI tiene que tener 7 u 8 dígitos.';
       isValid = false;
     }
 
@@ -129,9 +147,15 @@ const RegisterForm = () => {
       setSuccess(
         '¡Cuenta creada con éxito! Sesión iniciada. Redirigiendo al inicio...',
       );
-      setTimeout(() => {
-        navigate('/');
-      }, 1000);
+      // An embedding flow (checkout) takes over navigation itself; the
+      // default redirect-home-after-a-beat only applies to standalone use.
+      if (onSuccess) {
+        onSuccess();
+      } else {
+        setTimeout(() => {
+          navigate('/');
+        }, 1000);
+      }
     } catch (err: unknown) {
       const message =
         err instanceof Error ? err.message : 'Error al registrar la cuenta.';
@@ -239,6 +263,8 @@ const RegisterForm = () => {
         label="Registrarse con Google"
         disabled={isLoading}
         onError={(errMsg) => setError(errMsg)}
+        onSuccess={onSuccess}
+        onIncompleteProfile={onIncompleteProfile}
       />
 
       <p className="text-center font-body text-sm text-text-muted pt-1">

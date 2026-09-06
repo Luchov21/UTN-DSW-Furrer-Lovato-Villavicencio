@@ -69,6 +69,7 @@ export const useMemberCharge = (
   const [isSaving, setIsSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [printWarning, setPrintWarning] = useState<string | null>(null);
 
   const [orderView, setOrderView] = useState<OrderView | null>(null);
   const [isCreatingOrder, setIsCreatingOrder] = useState(false);
@@ -289,6 +290,7 @@ export const useMemberCharge = (
   const submit = async (userId: number): Promise<void> => {
     setFormError(null);
     setSuccess(null);
+    setPrintWarning(null);
 
     const validationError = findChargeFormError({ planId, months, amountText });
     if (validationError) {
@@ -333,7 +335,7 @@ export const useMemberCharge = (
 
     setIsSaving(true);
     try {
-      await registerPlanCheckout({
+      const payment = await registerPlanCheckout({
         userId,
         planId: Number(planId),
         months,
@@ -344,6 +346,11 @@ export const useMemberCharge = (
       setSuccess(
         `Cobro de $${formatPriceDisplay(amount)} registrado — ${plan?.name ?? 'plan'}, ${summary.termLabel}.`,
       );
+      if (payment.printStatus === 'error') {
+        setPrintWarning(
+          'El cobro se registró, pero no se pudo imprimir el comprobante en la terminal.',
+        );
+      }
       await onCharged?.(summary);
     } catch (err) {
       setFormError(
@@ -358,6 +365,6 @@ export const useMemberCharge = (
     plans, plansError, planId, setPlanId: setPlanIdTouched, months, setMonths,
     options, resolvedPrice, amountText, setAmountText, autoRenewedToday,
     method, setMethod, orderView, isCreatingOrder, orderError,
-    isSaving, formError, success, submit, cancelOrder, resetOrder,
+    isSaving, formError, success, printWarning, submit, cancelOrder, resetOrder,
   };
 };

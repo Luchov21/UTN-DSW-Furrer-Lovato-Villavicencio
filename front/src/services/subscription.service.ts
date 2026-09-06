@@ -33,19 +33,6 @@ export const getMySubscription = async (): Promise<Subscription | null> => {
   }
 };
 
-export const changePlan = async (planId: number): Promise<Subscription> => {
-  try {
-    const { data } = await api.post<Subscription>('/subscription/change-plan', {
-      planId,
-    });
-    return data;
-  } catch (error: unknown) {
-    throw new Error(getErrorMessage(error, 'No se pudo cambiar de plan.'), {
-      cause: error,
-    });
-  }
-};
-
 // Self-service: turning it off always succeeds; turning it on without an
 // active, chargeable saved card 409s (see subscription.controller.ts).
 export const setAutoRenew = async (
@@ -65,9 +52,9 @@ export const setAutoRenew = async (
   }
 };
 
-// Admin-side counterpart of changePlan: closes the member's active
-// subscription, if any, and opens one on the chosen plan. The id travels in
-// the path because the JWT here belongs to the admin, not to the member.
+// Admin path: closes the member's active subscription, if any, and opens one
+// on the chosen plan. The id travels in the path because the JWT here belongs
+// to the admin, not to the member.
 export const assignPlanToMember = async (
   userId: number,
   planId: number,

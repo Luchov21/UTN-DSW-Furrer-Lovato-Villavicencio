@@ -13,10 +13,7 @@ import {
   type MembershipPlan,
 } from '../../components/plans/plans.data';
 import { getPlans } from '../../services/plan.service';
-import {
-  changePlan,
-  getMySubscription,
-} from '../../services/subscription.service';
+import { getMySubscription } from '../../services/subscription.service';
 import type { User } from '../../types/user';
 import type { Subscription } from '../../types/subscription';
 
@@ -40,7 +37,6 @@ function Plan() {
   // The current user's active subscription (self-service; see Dashboard).
   const [activeSubscription, setActiveSubscription] =
     useState<Subscription | null>(null);
-  const [subscribingId, setSubscribingId] = useState<number | null>(null);
   const [actionFeedback, setActionFeedback] = useState<{
     type: 'success' | 'error';
     message: string;
@@ -99,24 +95,13 @@ function Plan() {
     );
   };
 
-  // Handle plan selection
-  const handleSelectPlan = async (selectedPlan: MembershipPlan) => {
+  // Everyone goes to the checkout, guest or member: /checkout handles the
+  // account step itself, so a guest no longer loses the plan they picked to a
+  // detour through /login.
+  const handleSelectPlan = (selectedPlan: MembershipPlan) => {
     setActionFeedback(null);
 
-    // 1. Guest flow -> Redirect to login/register
-    if (!currentUser) {
-      navigate('/login', {
-        state: {
-          message: 'Iniciá sesión o registrate para elegir tu plan.',
-          selectedPlanId: selectedPlan.id,
-        },
-      });
-      return;
-    }
-
-    const planIdNum = selectedPlan.id ?? 1;
-
-    if (hasActiveSubscriptionToPlan(planIdNum)) {
+    if (hasActiveSubscriptionToPlan(selectedPlan.id)) {
       setActionFeedback({
         type: 'success',
         message: `Ya tenés una suscripción activa al plan ${selectedPlan.name}.`,
@@ -124,27 +109,7 @@ function Plan() {
       return;
     }
 
-    setSubscribingId(planIdNum);
-
-    try {
-      const updated = await changePlan(planIdNum);
-      setActiveSubscription(updated);
-
-      setActionFeedback({
-        type: 'success',
-        message: `Tu cambio de plan a "${selectedPlan.name}" quedó pendiente. Acercate al gimnasio para abonarlo: el plan se activa cuando registremos tu pago, y mientras tanto seguís con tu plan actual.`,
-      });
-    } catch (err: unknown) {
-      setActionFeedback({
-        type: 'error',
-        message:
-          err instanceof Error
-            ? err.message
-            : 'No se pudo procesar la suscripción. Intentalo de nuevo.',
-      });
-    } finally {
-      setSubscribingId(null);
-    }
+    navigate(`/checkout?plan=${selectedPlan.id ?? ''}&months=1`);
   };
 
   return (
@@ -247,7 +212,6 @@ function Plan() {
                     key={plan.id || plan.name}
                     plan={plan}
                     onSelect={handleSelectPlan}
-                    isLoading={subscribingId === plan.id}
                     isCurrentSubscription={hasActiveSubscriptionToPlan(plan.id)}
                   />
                 ))}

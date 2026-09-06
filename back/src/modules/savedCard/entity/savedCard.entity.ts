@@ -29,6 +29,12 @@ export class SavedCard {
   @Column({ type: String, nullable: false, length: 32 })
   paymentMethodId!: string;
 
+  // credit_card / debit_card — required by the Orders API for every card
+  // charge. Nullable because cards saved before this column existed have no
+  // value; isChargeable treats a null here as not-chargeable.
+  @Column({ type: String, nullable: true, length: 32 })
+  paymentTypeId?: string | null;
+
   @Column({ type: Number, nullable: false })
   expirationMonth!: number;
 

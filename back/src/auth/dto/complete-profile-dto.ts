@@ -1,5 +1,13 @@
 import { Transform } from 'class-transformer';
-import { IsNumber, IsOptional, IsPositive, IsString, MinLength } from 'class-validator';
+import {
+  IsNumber,
+  IsOptional,
+  IsPositive,
+  IsString,
+  Max,
+  Min,
+  MinLength,
+} from 'class-validator';
 
 // The two fields Google never gives us.
 //
@@ -11,6 +19,10 @@ export class CompleteProfileDto {
   @IsNumber()
   @IsPositive()
   @IsOptional()
+  // See RegisterDto: a DNI is 7 or 8 digits, and anything past that overflows
+  // the `int` column it's stored in.
+  @Min(1000000, { message: 'El DNI tiene que tener 7 u 8 dígitos.' })
+  @Max(99999999, { message: 'El DNI tiene que tener 7 u 8 dígitos.' })
   dni?: number;
 
   @Transform(({ value }: { value: unknown }) =>

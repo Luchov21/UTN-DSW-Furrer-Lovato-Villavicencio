@@ -37,6 +37,8 @@ describe('RenewalService.chargeDueSubscriptions', () => {
     deleted: false,
     expirationMonth: 12,
     expirationYear: 2099,
+    paymentMethodId: 'master',
+    paymentTypeId: 'credit_card',
   };
 
   const buildSubscription = (overrides: Record<string, unknown> = {}) => ({
@@ -122,6 +124,62 @@ describe('RenewalService.chargeDueSubscriptions', () => {
         termMonths: 1,
         payMethod: 'mercadopago',
       }),
+    );
+  });
+
+  it("passes the saved card's method and type to chargeSavedCard", async () => {
+    const sub = buildSubscription();
+    subscriptionService.findDueForRenewal.mockResolvedValue([sub]);
+    savedCardService.findActiveForUser.mockResolvedValue({
+      mpCustomerId: 'cus_1',
+      mpCardId: 'card_1',
+      active: true,
+      deleted: false,
+      expirationMonth: 12,
+      expirationYear: 2099,
+      paymentMethodId: 'master',
+      paymentTypeId: 'credit_card',
+    });
+    mercadoPagoClient.chargeSavedCard.mockResolvedValue({
+      id: 'mp-1',
+      status: 'approved',
+    });
+    buildService();
+
+    await service.chargeDueSubscriptions();
+
+    expect(mercadoPagoClient.chargeSavedCard).toHaveBeenCalledWith(
+      expect.objectContaining({
+        paymentMethodId: 'master',
+        paymentTypeId: 'credit_card',
+      }),
+    );
+  });
+
+  it('persists mpOrderId when the renewal charge carries one', async () => {
+    const sub = buildSubscription();
+    subscriptionService.findDueForRenewal.mockResolvedValue([sub]);
+    savedCardService.findActiveForUser.mockResolvedValue({
+      mpCustomerId: 'cus_1',
+      mpCardId: 'card_1',
+      active: true,
+      deleted: false,
+      expirationMonth: 12,
+      expirationYear: 2099,
+      paymentMethodId: 'master',
+      paymentTypeId: 'credit_card',
+    });
+    mercadoPagoClient.chargeSavedCard.mockResolvedValue({
+      id: 'mp-1',
+      status: 'approved',
+      mpOrderId: 'ORD20',
+    });
+    buildService();
+
+    await service.chargeDueSubscriptions();
+
+    expect(paymentService.createFromMercadoPago).toHaveBeenCalledWith(
+      expect.objectContaining({ mpOrderId: 'ORD20' }),
     );
   });
 

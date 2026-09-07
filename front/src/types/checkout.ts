@@ -26,7 +26,12 @@ export interface CheckoutResult {
 // Mirrors CheckoutDto. No amount: the backend resolves the price itself.
 export interface CheckoutPayload {
   planId: number;
-  months: number;
+  // Optional: a plan-change checkout prices the proration itself and has no
+  // term to pick, so `months` has nothing to carry.
+  months?: number;
+  // Absent (the default) is a term purchase. 'plan-change' charges the
+  // member-specific upgrade proration instead of a term price.
+  mode?: 'term' | 'plan-change';
   cardToken?: string;
   paymentMethodId?: string;
   paymentTypeId?: string;

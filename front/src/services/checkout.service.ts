@@ -5,6 +5,7 @@ import type {
   CheckoutStatus,
   CheckoutSummary,
 } from '../types/checkout';
+import type { PlanChangeQuote } from '../types/plan-change';
 import { getApiErrorMessage } from './api-error';
 import api from './api';
 
@@ -74,6 +75,25 @@ export const armCheckout = async (payload: {
   } catch (error) {
     throw new Error(
       getApiErrorMessage(error, 'No se pudo iniciar el pago. Probá de nuevo.'),
+      { cause: error },
+    );
+  }
+};
+
+// Self-service: the priced, member-specific quote for changing to `planId`.
+// Requires an authenticated member — GET /checkout/summary above is the
+// public, no-subscription-needed equivalent for a term purchase.
+export const getPlanChangeQuote = async (
+  planId: number,
+): Promise<PlanChangeQuote> => {
+  try {
+    const { data } = await api.get<PlanChangeQuote>('/checkout/plan-change', {
+      params: { planId },
+    });
+    return data;
+  } catch (error) {
+    throw new Error(
+      getApiErrorMessage(error, 'No se pudo calcular el cambio de plan.'),
       { cause: error },
     );
   }

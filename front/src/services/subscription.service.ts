@@ -1,4 +1,5 @@
 import type { Subscription } from '../types/subscription';
+import type { PlanChangeResult } from '../types/plan-change';
 import { AxiosError } from 'axios';
 import api from './api';
 
@@ -47,6 +48,43 @@ export const setAutoRenew = async (
   } catch (error: unknown) {
     throw new Error(
       getErrorMessage(error, 'No se pudo actualizar la renovación automática.'),
+      { cause: error },
+    );
+  }
+};
+
+// Self-service: applies a free plan change (lateral immediately, downgrade at
+// renewal). An upgrade 409s here on purpose — it has a cost, and must go
+// through POST /checkout in plan-change mode instead of this route.
+export const applyPlanChange = async (
+  planId: number,
+): Promise<PlanChangeResult> => {
+  try {
+    const { data } = await api.put<PlanChangeResult>(
+      '/subscription/me/plan-change',
+      { planId },
+    );
+    return data;
+  } catch (error: unknown) {
+    throw new Error(
+      getErrorMessage(error, 'No se pudo cambiar de plan.'),
+      { cause: error },
+    );
+  }
+};
+
+// Self-service: clears a scheduled downgrade set by applyPlanChange. The live
+// term itself is untouched — this only cancels what would have happened at
+// renewal.
+export const cancelScheduledPlanChange = async (): Promise<Subscription> => {
+  try {
+    const { data } = await api.delete<Subscription>(
+      '/subscription/me/plan-change',
+    );
+    return data;
+  } catch (error: unknown) {
+    throw new Error(
+      getErrorMessage(error, 'No se pudo cancelar el cambio de plan programado.'),
       { cause: error },
     );
   }

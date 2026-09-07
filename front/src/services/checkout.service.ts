@@ -113,6 +113,12 @@ export const getPlanChangeQuote = async (
 // fetch failure (same catch branch, same "couldn't price this" error path)
 // instead of rendering a payable amount for a change the backend would
 // refuse.
+//
+// `isOneTimeAdjustment: true` is load-bearing, not cosmetic: without it
+// OrderSummary would render `quote.amount` — a one-time proration top-up —
+// as "$X / mes" and "Subtotal (1 × $X)", which reads as the member's new
+// recurring monthly price. It isn't; they keep their current plan's cycle
+// price going forward. See OrderSummary.tsx for the rendering this flips.
 export const planChangeQuoteToSummary = (
   quote: PlanChangeQuote,
 ): CheckoutSummary => {
@@ -129,6 +135,7 @@ export const planChangeQuoteToSummary = (
     total: quote.amount,
     currency: 'ARS',
     availableMonths: [],
+    isOneTimeAdjustment: true,
   };
 };
 

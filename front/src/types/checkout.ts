@@ -10,6 +10,14 @@ export interface CheckoutSummary {
   total: number;
   currency: 'ARS';
   availableMonths: number[];
+  // Set only when this summary was adapted from a plan-change quote
+  // (see planChangeQuoteToSummary): `monthlyPrice`/`subtotal`/`total` all
+  // carry the same one-time proration top-up, not a new recurring price, so
+  // OrderSummary must render it as a single adjustment rather than as
+  // "$X / mes" / "Subtotal (N × $X)" — showing either would read as the
+  // member's monthly price having changed, which it hasn't. Absent (the
+  // default) renders the existing recurring-purchase copy unchanged.
+  isOneTimeAdjustment?: boolean;
 }
 
 export interface CheckoutResult {

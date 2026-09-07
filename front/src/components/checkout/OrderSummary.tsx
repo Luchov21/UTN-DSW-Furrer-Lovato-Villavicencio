@@ -28,15 +28,18 @@ const OrderSummary = ({ summary }: OrderSummaryProps) => (
     <div className="mt-4 flex items-baseline justify-between gap-4">
       <span className="font-body text-sm text-text">{summary.planName}</span>
       <span className="font-body text-sm text-text-muted">
-        ${formatPriceDisplay(summary.monthlyPrice)} / mes
+        {summary.isOneTimeAdjustment
+          ? 'Ajuste único'
+          : `$${formatPriceDisplay(summary.monthlyPrice)} / mes`}
       </span>
     </div>
 
     <dl className="mt-5 space-y-2 border-t border-border pt-4 text-sm">
       <div className="flex justify-between gap-4">
         <dt className="text-text-muted">
-          Subtotal ({summary.months} × $
-          {formatPriceDisplay(summary.monthlyPrice)})
+          {summary.isOneTimeAdjustment
+            ? 'Diferencia a pagar'
+            : `Subtotal (${summary.months} × $${formatPriceDisplay(summary.monthlyPrice)})`}
         </dt>
         <dd className="text-text">${formatPriceDisplay(summary.subtotal)}</dd>
       </div>

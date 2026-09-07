@@ -40,6 +40,14 @@ export interface CreateChargeParams {
    * constraint enforces the invariant either way.
    */
   externalReference?: string;
+  /**
+   * Set only by a prorated plan-change checkout: the id of the subscription
+   * being replaced. Carried onto the ChargeOrder row so a webhook that later
+   * resolves this order (see ChargeOrderResolverAdapter) knows to settle it
+   * as a prorated upgrade rather than a fresh term. Null for every ordinary
+   * term purchase.
+   */
+  changeFromSubscriptionId?: number | null;
 }
 
 // Front-desk bookkeeping for card-terminal ("point") and QR charges. This is
@@ -76,6 +84,7 @@ export class ChargeOrderService {
       collectionPointId,
       adminId,
       externalReference: suppliedExternalReference,
+      changeFromSubscriptionId,
     } = params;
 
     // Defense in depth for the pairing the rest of this method assumes:
@@ -126,8 +135,19 @@ export class ChargeOrderService {
     // matching (non-deleted) PlanDuration for this plan. Its price is NOT
     // used as the order amount — the admin's amount is, so a front-desk
     // discount is what the member is actually charged.
+    //
+    // A prorated plan change is the one caller that arrives here with
+    // months===0 (ResolvedCharge.termMonths's own convention: a proration
+    // buys no term) — no plan has a 0-month PlanDuration, so resolveTerm
+    // would throw NotFoundException for a charge that is correctly priced.
+    // Skip it the same way PaymentService.confirmPlanCharge's own
+    // isPlanChange branch does: there is no term to resolve, just the plan's
+    // own numDays and no PlanDuration to point at.
+    const isPlanChange = months === 0 || changeFromSubscriptionId != null;
     const durations = await this.planDurationService.findByPlan(planId);
-    const term = resolveTerm(plan, months, durations);
+    const term = isPlanChange
+      ? { months: 0, numDays: plan.numDays, planDurationId: null }
+      : resolveTerm(plan, months, durations);
 
     // Expire stale orders before checking whether the point is busy, so an
     // abandoned charge from a few minutes ago never blocks the counter. Bulk
@@ -183,6 +203,10 @@ export class ChargeOrderService {
         planId,
         termMonths: term.months,
         planDurationId: term.planDurationId,
+        // Null for an ordinary term purchase; the subscription being
+        // replaced for a prorated upgrade, which is what makes the webhook
+        // inherit its end date instead of opening a fresh term.
+        changeFromSubscriptionId: changeFromSubscriptionId ?? null,
         method,
         externalReference,
         mpOrderId: null,
@@ -205,6 +229,18 @@ export class ChargeOrderService {
     return this.chargeOrderRepository.findOne({
       where: { externalReference },
     });
+  }
+
+  // Used by ChargeOrderResolverAdapter to resolve the endDate a prorated
+  // upgrade must inherit, once the webhook confirms the money: the order
+  // itself only carries the id of the subscription being replaced
+  // (changeFromSubscriptionId), not the date. subscriptionService is already
+  // injected here for the paused-membership check above, so this is a thin
+  // passthrough rather than a reason to widen the adapter's own dependencies.
+  async findSubscriptionEndDate(subscriptionId: number): Promise<Date | null> {
+    const subscription =
+      await this.subscriptionService.findSubscription(subscriptionId);
+    return subscription?.endDate ?? null;
   }
 
   // Used by the controller (Task 16) for the polling GET and for the cancel

@@ -49,6 +49,18 @@ export class ChargeOrderResolverAdapter implements OrderResolver {
     const payMethod =
       chargeOrder.method === onlineMethod ? 'mercadopago' : chargeOrder.method;
 
+    // Undefined (not null) when this isn't a plan change, so it drops out of
+    // a `toEqual` comparison exactly like every other optional ResolvedOrder
+    // field the existing tests assert on — see PaymentService.confirmPlanCharge's
+    // own isPlanChange check, which reads `!= null` either way.
+    const changeFromSubscriptionId =
+      chargeOrder.changeFromSubscriptionId ?? undefined;
+    const endDateOverride = changeFromSubscriptionId
+      ? await this.chargeOrderService.findSubscriptionEndDate(
+          changeFromSubscriptionId,
+        )
+      : undefined;
+
     return {
       userId: chargeOrder.userId,
       planId: chargeOrder.planId,
@@ -56,6 +68,8 @@ export class ChargeOrderResolverAdapter implements OrderResolver {
       amount: chargeOrder.amount,
       payMethod,
       registeredById: chargeOrder.createdById,
+      changeFromSubscriptionId,
+      endDateOverride,
     };
   }
 

@@ -481,6 +481,44 @@ describe('ChargeOrderService.createCharge', () => {
 
     expect(saved.externalReference).toMatch(/^flg-user-7-[a-f0-9]{8}$/);
   });
+
+  // Load-bearing regression guard, carried forward from Task 6's review:
+  // resolveTerm(plan, months, durations) throws NotFoundException for any
+  // months value with no matching PlanDuration, and no plan has a 0-month
+  // duration. A prorated plan-change charge arrives here with months: 0 (the
+  // ResolvedCharge.termMonths convention — a proration buys no term), so
+  // without a branch this would throw one layer below where checkout.service
+  // already resolves the correct amount.
+  it('does not throw for a prorated plan-change charge (months: 0)', async () => {
+    await buildService();
+
+    const saved = await service.createCharge({
+      ...params,
+      months: 0,
+      changeFromSubscriptionId: 10,
+    });
+
+    expect(manager.create).toHaveBeenCalledWith(
+      ChargeOrder,
+      expect.objectContaining({
+        termMonths: 0,
+        planDurationId: null,
+        changeFromSubscriptionId: 10,
+      }),
+    );
+    expect(saved).toBeDefined();
+  });
+
+  it('records changeFromSubscriptionId as null for an ordinary term purchase', async () => {
+    await buildService();
+
+    await service.createCharge(params);
+
+    expect(manager.create).toHaveBeenCalledWith(
+      ChargeOrder,
+      expect.objectContaining({ changeFromSubscriptionId: null }),
+    );
+  });
 });
 
 describe('ChargeOrderService.findByExternalReference', () => {

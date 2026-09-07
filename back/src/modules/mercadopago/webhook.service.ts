@@ -30,6 +30,13 @@ export interface ResolvedOrder {
   // Optional/nullable so a future resolver with no notion of "who" (there
   // isn't one today) doesn't have to fabricate a value.
   registeredById?: number | null;
+  // Set only when the order behind this notification was a prorated plan
+  // change (ChargeOrder.changeFromSubscriptionId): the id of the
+  // subscription being replaced, and the end date the new one must inherit.
+  // Passed straight through to PaymentService.confirmPlanCharge, which is
+  // what actually branches on them. Undefined for every ordinary term order.
+  changeFromSubscriptionId?: number | null;
+  endDateOverride?: Date | null;
 }
 
 /**
@@ -218,6 +225,8 @@ export class WebhookService {
         payMethod: resolved.payMethod,
         registeredById: resolved.registeredById ?? null,
         mpOrderId: payment.mpOrderId,
+        changeFromSubscriptionId: resolved.changeFromSubscriptionId ?? null,
+        endDateOverride: resolved.endDateOverride ?? null,
       });
     } catch (err) {
       // Rethrown, not swallowed: Mercado Pago has already taken the money, so

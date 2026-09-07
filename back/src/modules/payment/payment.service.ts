@@ -98,6 +98,13 @@ export class PaymentService {
     payMethod: string;
     registeredById?: number | null;
     mpOrderId?: string | null;
+    // Set only by a prorated plan-change checkout (front-desk or online):
+    // the id of the subscription being replaced, and the end date the new
+    // one must inherit instead of opening a fresh term. See
+    // subscriptionService.replaceActiveSubscription's own comment on the
+    // same two fields.
+    changeFromSubscriptionId?: number | null;
+    endDateOverride?: Date | null;
   }): Promise<{ payment: Payment; subscription: Subscription }> {
     // Idempotency first: Mercado Pago retries a notification up to eight
     // times over four days, and a retry must not sell the plan twice.
@@ -112,7 +119,18 @@ export class PaymentService {
     }
 
     const durations = await this.planDurationService.findByPlan(input.planId);
-    const term = resolveTerm(plan, input.months, durations);
+    const isPlanChange = input.changeFromSubscriptionId != null;
+
+    // A prorated change buys no term, so resolveTerm has nothing to resolve
+    // — no PlanDuration has 0 months, and none should.
+    const term = isPlanChange
+      ? {
+          months: 0,
+          numDays: plan.numDays,
+          price: Number(plan.price),
+          planDurationId: null,
+        }
+      : resolveTerm(plan, input.months, durations);
 
     const { payment, subscription } = await this.dataSource.transaction(
       async (manager) => {
@@ -121,7 +139,19 @@ export class PaymentService {
             userId: input.userId,
             planId: input.planId,
             term,
-            soldPrice: input.amount,
+            // Per the spec's R6: on a prorated row soldPrice is the new
+            // plan's regular monthly price — the member's ongoing value —
+            // not the difference collected, which lives on the Payment row
+            // (`amount` below). Recording the discounted amount here would
+            // report this member's MRR contribution at the one-time
+            // proration instead of what they actually pay from here on.
+            soldPrice: isPlanChange ? Number(plan.price) : input.amount,
+            ...(isPlanChange
+              ? {
+                  endDate: input.endDateOverride!,
+                  changedFromSubscriptionId: input.changeFromSubscriptionId!,
+                }
+              : {}),
           });
 
         const payment = manager.create(Payment, {
@@ -133,6 +163,8 @@ export class PaymentService {
           state: PaymentState.COMPLETED,
           registeredById: input.registeredById ?? null,
           mpOrderId: input.mpOrderId ?? null,
+          // 0 on a plan change: a prorated adjustment is not a purchase of N
+          // months, and 1 would overstate it the moment anything reads this.
           termMonths: term.months,
           // Same convention as createFromMercadoPago: the plan's monthly list
           // price, not the discounted amount.

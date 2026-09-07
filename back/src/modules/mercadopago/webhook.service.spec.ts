@@ -85,6 +85,35 @@ describe('WebhookService.handleNotification', () => {
     expect(orderResolver.close).toHaveBeenCalledWith('order-1', 77, 88);
   });
 
+  it('passes changeFromSubscriptionId/endDateOverride through for a prorated upgrade', async () => {
+    orderResolver.resolve.mockResolvedValue({
+      ...resolvedOrder,
+      termMonths: 0,
+      changeFromSubscriptionId: 10,
+      endDateOverride: '2026-03-31',
+    });
+
+    await service.handleNotification('mp-1', 'payment');
+
+    expect(paymentService.confirmPlanCharge).toHaveBeenCalledWith(
+      expect.objectContaining({
+        changeFromSubscriptionId: 10,
+        endDateOverride: '2026-03-31',
+      }),
+    );
+  });
+
+  it('passes null changeFromSubscriptionId/endDateOverride for an ordinary term order', async () => {
+    await service.handleNotification('mp-1', 'payment');
+
+    expect(paymentService.confirmPlanCharge).toHaveBeenCalledWith(
+      expect.objectContaining({
+        changeFromSubscriptionId: null,
+        endDateOverride: null,
+      }),
+    );
+  });
+
   it('does not create anything when the amount does not match the snapshot', async () => {
     client.getPayment.mockResolvedValue({
       id: 'mp-underpaid',

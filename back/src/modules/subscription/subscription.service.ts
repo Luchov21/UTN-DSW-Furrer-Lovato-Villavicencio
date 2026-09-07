@@ -475,13 +475,17 @@ export class subscriptionService {
       live.scheduledPlanId = null;
       // planDurationId still points at the OLD plan's PlanDuration row —
       // stale the moment planId changes out from under it, since a
-      // PlanDuration belongs to exactly one plan. soldPrice is left alone on
-      // purpose: the member already paid what they paid at whatever
-      // discount applied, and a lateral move is explicitly free, so their
-      // prior payment record should stand. Only the duration FK, which no
-      // longer correctly describes this row, needs to be nulled (final
-      // review, Important finding).
+      // PlanDuration belongs to exactly one plan. soldPrice must be rewritten
+      // to the new plan's regular monthly price in the same breath: this is
+      // the same pairing renew()'s scheduled-downgrade branch and
+      // confirmPlanCharge's prorated-upgrade branch both already follow —
+      // estimatedMrr divides soldPrice by planDuration?.months, falling back
+      // to 1 when planDurationId is null, so a null planDurationId paired
+      // with a leftover multi-month soldPrice total would overstate MRR by
+      // that many months (final review, Important finding — an earlier
+      // version of this fix left soldPrice alone, which was wrong).
       live.planDurationId = null;
+      live.soldPrice = Number(plan.price);
     } else {
       live.scheduledPlanId = planId;
     }

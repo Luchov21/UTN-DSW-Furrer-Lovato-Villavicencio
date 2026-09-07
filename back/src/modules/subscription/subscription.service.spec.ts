@@ -878,10 +878,12 @@ describe('subscriptionService', () => {
       // OLD plan's duration row after a lateral move, even though the
       // subscription now claims a different plan.
       expect(live.planDurationId).toBeNull();
-      // soldPrice must NOT be touched: the member already paid what they
-      // paid, and a lateral move is explicitly free, so their prior payment
-      // record stands.
-      expect(live.soldPrice).toBe(8500);
+      // soldPrice must be rewritten to the new plan's regular monthly price:
+      // leaving the old multi-month total in place with planDurationId now
+      // null would overstate estimatedMrr (which falls back to dividing by 1
+      // month when planDurationId is null) by however many months the old
+      // term covered.
+      expect(live.soldPrice).toBe(13500);
       jest.useRealTimers();
     });
 

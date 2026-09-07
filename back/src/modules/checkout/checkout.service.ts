@@ -611,7 +611,13 @@ export class CheckoutService {
       name: subscription.user.name,
       planName: subscription.plan.name,
       amount: charge.amount,
-      termMonths: dto.months,
+      // Not dto.months: it is undefined in plan-change mode (see the
+      // @ValidateIf on the DTOs), and the receipt template must not
+      // interpolate that as "undefined meses". charge.termMonths is
+      // resolveCharge's own resolved value — 0 for a plan change — so null
+      // here unambiguously tells the template to render "Ajuste de plan"
+      // instead of a month count (final review, Important finding).
+      termMonths: charge.termMonths === 0 ? null : charge.termMonths,
       method: 'mercadopago',
       newEndDate: subscription.endDate,
     });

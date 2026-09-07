@@ -140,11 +140,27 @@ export const isPlanChangeCandidate = (
   currentPlanId !== null &&
   planId !== currentPlanId;
 
-// The advisory pre-fill from an admin plan-change quote. Only an eligible
-// upgrade has a partial-term amount to collect today — self-service never
-// charges a downgrade or a lateral move (and an ineligible quote has no
-// amount at all) — so 0 is what the admin sees before deciding to override
-// it. Mirrors the brief's own snippet verbatim; kept as a named function so
-// it's testable without mounting the hook.
-export const amountForPlanChangeQuote = (quote: PlanChangeQuote): number =>
-  quote.eligible && quote.direction === 'upgrade' ? quote.amount : 0;
+// The advisory pre-fill from an admin plan-change quote.
+//
+// An eligible UPGRADE deliberately returns null (= "don't pre-fill
+// anything, leave whatever is already on screen") rather than the quote's
+// prorated amount. The front-desk write path this form submits to —
+// PaymentService.registerPlanPayment, and the point/QR createChargeOrder
+// path — has no branch for a prorated plan change: it always resolves a
+// brand-new full term via resolveTerm(plan, dto.months, durations) and
+// writes soldPrice as whatever amount the admin charges. If this pre-filled
+// the tiny prorated amount and the admin accepted it as-is for a genuine
+// upgrade, the resulting subscription would (a) get a fresh full term
+// instead of keeping the old endDate — a free extra term for the member —
+// and (b) record soldPrice as the prorated sliver instead of the new plan's
+// real price, corrupting MRR reporting. (Final whole-branch review, Critical
+// finding.) Returning null here is the same "nothing to pre-fill" outcome
+// the caller already gets when there is no applicable quote at all, so the
+// admin sees the list price that was already there and must type the real
+// charge themselves — exactly as before this pre-fill existed.
+//
+// Downgrade and lateral moves keep pre-filling 0: self-service never charges
+// either one, and 0 does not carry the same "looks like a real charge"
+// danger the prorated upgrade amount does.
+export const amountForPlanChangeQuote = (quote: PlanChangeQuote): number | null =>
+  quote.eligible && quote.direction === 'upgrade' ? null : 0;

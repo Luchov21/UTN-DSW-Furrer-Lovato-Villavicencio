@@ -453,16 +453,21 @@ describe('CheckoutController authorization', () => {
   });
 
   it('refuses an anonymous plan-change quote', async () => {
-    await request(app.getHttpServer())
-      .get('/api/v1/checkout/plan-change?planId=1')
-      .expect(401);
+    await call(
+      app,
+      'get',
+      '/api/v1/checkout/plan-change?planId=1',
+      ANONYMOUS,
+    ).expect(401);
   });
 
   it('lets a member quote their own plan change', async () => {
-    await request(app.getHttpServer())
-      .get('/api/v1/checkout/plan-change?planId=1')
-      .set('Authorization', `Bearer ${tokenFor('member')}`)
-      .expect((res) => expect(res.status).not.toBe(401));
+    await call(
+      app,
+      'get',
+      '/api/v1/checkout/plan-change?planId=1',
+      tokenFor('member'),
+    ).expect((res) => expect(res.status).not.toBe(401));
   });
 
   // The front desk's counterpart: a member cannot quote someone else's plan
@@ -769,11 +774,13 @@ describe('subscriptionController authorization', () => {
   it('gives a member no way to name another member', async () => {
     // The identity comes from the JWT on all three routes; there is no userId
     // in any body or query to tamper with. This test is the standing proof.
-    await request(app.getHttpServer())
-      .put('/api/v1/subscription/me/plan-change')
-      .set('Authorization', `Bearer ${tokenFor('member')}`)
-      .send({ planId: 1, userId: 999 })
-      .expect((res) => expect(res.status).not.toBe(500));
+    await call(
+      app,
+      'put',
+      '/api/v1/subscription/me/plan-change',
+      tokenFor('member'),
+      { planId: 1, userId: 999 },
+    ).expect((res) => expect(res.status).not.toBe(500));
   });
 
   it('restricts POST /subscription to an admin', async () => {

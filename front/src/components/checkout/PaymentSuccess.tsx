@@ -54,7 +54,18 @@ const PaymentSuccess = ({ result, showAddCardNudge }: PaymentSuccessProps) => (
       <div className="flex justify-between gap-4">
         <dt className="text-text-muted">Duración</dt>
         <dd className="text-text">
-          {result.months === 1 ? '1 mes' : `${result.months} meses`}
+          {/* A prorated plan-change payment buys no term: the backend hands
+              this a falsy months (undefined from the synchronous pay() path,
+              since dto.months is undefined by design in plan-change mode; 0
+              from the polled /checkout/status path, ResolvedCharge's own
+              "no term" convention). Neither is a month count worth showing —
+              see OrderSummary's isOneTimeAdjustment for the same distinction
+              made at the order-summary step. */}
+          {!result.months
+            ? 'Ajuste de plan'
+            : result.months === 1
+              ? '1 mes'
+              : `${result.months} meses`}
         </dd>
       </div>
       <div className="flex justify-between gap-4">

@@ -664,6 +664,14 @@ describe('CheckoutService.pay', () => {
         }),
       );
       expect(result.status).toBe('approved');
+      // Final-review Important finding: dto.months is undefined in
+      // plan-change mode, and the receipt template used to interpolate that
+      // raw as "undefined meses". termMonths must reach the mail service as
+      // null (derived from charge.termMonths === 0), never dto.months
+      // itself.
+      expect(mail.sendPaymentReceipt).toHaveBeenCalledWith(
+        expect.objectContaining({ termMonths: null }),
+      );
       jest.useRealTimers();
     });
   });

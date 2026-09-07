@@ -109,7 +109,14 @@ describe('useMemberCharge — plan-change quote vs. amountText', () => {
     expect(result.current.amountText).toBe('10.000');
   });
 
-  it('still pre-fills the quoted amount when the admin manually picks a different plan (upgrade)', async () => {
+  it('does NOT pre-fill the quoted prorated amount when the admin manually picks an upgrade (final-review Critical fix)', async () => {
+    // registerPlanPayment/createChargeOrder have no branch for a prorated
+    // plan change — they always write a fresh full term at whatever amount
+    // the admin charges. Pre-filling the prorated amount here would let an
+    // admin accept it at face value and under-charge a genuine upgrade,
+    // handing the member a free extra term and corrupting soldPrice/MRR. So
+    // an eligible upgrade must leave the amount field alone (list price),
+    // not overwrite it with the quote's amount.
     vi.spyOn(planService, 'getPlans').mockResolvedValue([BASICO, PREMIUM, ELITE]);
     vi.spyOn(planService, 'getPlanDurations').mockResolvedValue([]);
     vi.spyOn(subscriptionService, 'getSubscriptionsByUser').mockResolvedValue([
@@ -133,9 +140,13 @@ describe('useMemberCharge — plan-change quote vs. amountText', () => {
     });
 
     await waitFor(() => expect(result.current.quote?.planId).toBe(ELITE.id));
-    // Unaffected by the fix: a manually-picked plan still gets the quoted,
-    // prorated amount, not the plan's own list price.
-    expect(result.current.amountText).toBe('5.000');
+    // The quote resolved (eligible upgrade, prorated amount 5.000), but the
+    // amount field must still read Elite's own list price — the quote's
+    // prorated amount is never written into a field that flows into a
+    // payment write with no proration support.
+    expect(result.current.quote?.direction).toBe('upgrade');
+    expect(result.current.quote?.amount).toBe(5000);
+    expect(result.current.amountText).toBe('30.000');
   });
 
   it('still pre-fills 0 when the admin manually picks a downgrade/lateral plan', async () => {

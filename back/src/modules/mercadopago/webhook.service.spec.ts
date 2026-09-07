@@ -103,6 +103,25 @@ describe('WebhookService.handleNotification', () => {
     );
   });
 
+  // Final-review Important finding: a prorated plan change settled
+  // asynchronously (Point/QR/wallet) through this webhook must not leak
+  // resolved.termMonths (0 for a plan change) into the receipt as a literal
+  // "0 meses" — the mail service must see null instead.
+  it('sends the receipt with termMonths null for a prorated upgrade settled through the webhook', async () => {
+    orderResolver.resolve.mockResolvedValue({
+      ...resolvedOrder,
+      termMonths: 0,
+      changeFromSubscriptionId: 10,
+      endDateOverride: '2026-03-31',
+    });
+
+    await service.handleNotification('mp-1', 'payment');
+
+    expect(mailService.sendPaymentReceipt).toHaveBeenCalledWith(
+      expect.objectContaining({ termMonths: null }),
+    );
+  });
+
   it('passes null changeFromSubscriptionId/endDateOverride for an ordinary term order', async () => {
     await service.handleNotification('mp-1', 'payment');
 

@@ -153,8 +153,8 @@ describe('amountForPlanChangeQuote', () => {
     effectiveEndDate: '2026-10-01',
   };
 
-  it('pre-fills the prorated amount for an eligible upgrade', () => {
-    expect(amountForPlanChangeQuote(base)).toBe(15000);
+  it('does NOT pre-fill the prorated amount for an eligible upgrade — the front-desk write path has no proration support', () => {
+    expect(amountForPlanChangeQuote(base)).toBeNull();
   });
 
   it('pre-fills zero for a downgrade — self-service never charges one', () => {

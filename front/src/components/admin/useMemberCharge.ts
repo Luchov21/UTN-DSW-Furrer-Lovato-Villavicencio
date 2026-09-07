@@ -206,9 +206,17 @@ export const useMemberCharge = (
         // would clobber the synchronous resolvedPrice effect's already-correct
         // list-price value with 0, forcing the admin to retype the price on
         // every ordinary renewal (round 1 review finding). A manually-picked
-        // plan change is unaffected: it still pre-fills exactly as shipped.
+        // plan change is unaffected: it still pre-fills exactly as shipped —
+        // except an eligible upgrade, whose prorated amount amountForPlanChangeQuote
+        // deliberately refuses to hand back (see that function's comment: the
+        // write path this form submits to has no proration support, so
+        // pre-filling it would let an admin under-charge and grant a free
+        // extra term). null there means "leave amountText alone".
         if (planTouchedRef.current) {
-          setAmountText(formatPriceDisplay(amountForPlanChangeQuote(nextQuote)));
+          const prefillAmount = amountForPlanChangeQuote(nextQuote);
+          if (prefillAmount !== null) {
+            setAmountText(formatPriceDisplay(prefillAmount));
+          }
         }
       })
       .catch((err: unknown) => {

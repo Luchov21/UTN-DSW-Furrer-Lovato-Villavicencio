@@ -706,7 +706,9 @@ describe('subscriptionService', () => {
         find: jest.fn().mockResolvedValue([
           { id: 10, state: 'activa', endDate: '2026-03-31', scheduledPlanId: 5 },
         ]),
-        create: jest.fn((_entity, data) => data),
+        create: jest.fn(
+          (_entity: unknown, data: CreatedSubscriptionPayload) => data,
+        ),
         save: jest.fn((row) => Promise.resolve({ id: 11, ...row })),
       } as unknown as EntityManager;
 
@@ -734,7 +736,9 @@ describe('subscriptionService', () => {
       };
       const manager = {
         find: jest.fn().mockResolvedValue([cancelled]),
-        create: jest.fn((_entity, data) => data),
+        create: jest.fn(
+          (_entity: unknown, data: CreatedSubscriptionPayload) => data,
+        ),
         save: jest.fn((row) => Promise.resolve(row)),
       } as unknown as EntityManager;
 
@@ -838,6 +842,10 @@ describe('subscriptionService', () => {
       const live = {
         id: 10,
         planId: 2,
+        // Non-null on purpose: proves the assertion below is checking a
+        // real reset, not a fixture that started out null already.
+        planDurationId: 55,
+        soldPrice: 8500,
         endDate: '2026-03-31',
         state: 'activa',
         scheduledPlanId: null,
@@ -866,6 +874,14 @@ describe('subscriptionService', () => {
       expect(live.planId).toBe(4);
       expect(live.scheduledPlanId).toBeNull();
       expect(live.endDate).toBe('2026-03-31');
+      // Final-review Important finding: planDurationId still pointed at the
+      // OLD plan's duration row after a lateral move, even though the
+      // subscription now claims a different plan.
+      expect(live.planDurationId).toBeNull();
+      // soldPrice must NOT be touched: the member already paid what they
+      // paid, and a lateral move is explicitly free, so their prior payment
+      // record stands.
+      expect(live.soldPrice).toBe(8500);
       jest.useRealTimers();
     });
 

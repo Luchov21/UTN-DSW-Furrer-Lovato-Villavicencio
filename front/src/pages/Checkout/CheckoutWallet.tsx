@@ -317,11 +317,29 @@ function CheckoutWallet() {
           and preference for the new months, but the card stays mounted with
           its previous (still valid to look at) contents; only the payment
           form area below falls back to an inline spinner while that finishes,
-          so picking a duration doesn't blank the whole page. */}
-      {!summary ? (
+          so picking a duration doesn't blank the whole page.
+          `error` is checked here too: the plan-change quote fetch
+          (getPlanChangeQuote) can reject — the member's term got locked, or
+          moved too close to its end, between the dashboard's quote and
+          reaching checkout, which is a real gap a bookmarked/shared URL, a
+          second tab, or plain elapsed time can all open. That leaves
+          `summary` null forever, and until this check existed the FormAlert
+          below (inside the `summary`-present branch) never rendered, so the
+          member sat on this spinner with no way out (final-review Important
+          finding). */}
+      {!summary && !error ? (
         <div className="flex h-48 items-center justify-center">
           <Loader2 className="h-8 w-8 animate-spin text-primary" />
         </div>
+      ) : !summary && error ? (
+        <Card className="hover:translate-y-0 hover:shadow-lg">
+          <div className="space-y-4">
+            <FormAlert type="error" message={error} />
+            <Button href="/membership" variant="secondary" className="w-full">
+              Volver a mi plan
+            </Button>
+          </div>
+        </Card>
       ) : (
         <Card className="hover:translate-y-0 hover:shadow-lg">
           <div className="space-y-5">

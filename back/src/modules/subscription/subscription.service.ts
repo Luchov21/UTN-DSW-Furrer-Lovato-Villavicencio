@@ -473,6 +473,15 @@ export class subscriptionService {
     if (assessment.direction === 'lateral') {
       live.planId = planId;
       live.scheduledPlanId = null;
+      // planDurationId still points at the OLD plan's PlanDuration row —
+      // stale the moment planId changes out from under it, since a
+      // PlanDuration belongs to exactly one plan. soldPrice is left alone on
+      // purpose: the member already paid what they paid at whatever
+      // discount applied, and a lateral move is explicitly free, so their
+      // prior payment record should stand. Only the duration FK, which no
+      // longer correctly describes this row, needs to be nulled (final
+      // review, Important finding).
+      live.planDurationId = null;
     } else {
       live.scheduledPlanId = planId;
     }

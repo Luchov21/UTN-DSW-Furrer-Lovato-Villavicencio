@@ -252,7 +252,11 @@ export class WebhookService {
       name: subscription.user.name,
       planName: subscription.plan.name,
       amount: resolved.amount,
-      termMonths: resolved.termMonths,
+      // Same convention as CheckoutService.settle: resolved.termMonths is 0
+      // for a prorated plan change settled asynchronously (Point/QR/wallet)
+      // through this webhook — null tells the template to render "Ajuste de
+      // plan" instead of "0 meses".
+      termMonths: resolved.termMonths === 0 ? null : resolved.termMonths,
       method: resolved.payMethod,
       newEndDate: subscription.endDate,
     });

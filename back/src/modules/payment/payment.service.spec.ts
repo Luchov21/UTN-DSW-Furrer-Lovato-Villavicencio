@@ -414,6 +414,35 @@ describe('createManualPayment — advance payment onto a scheduled plan', () => 
     expect(plans.findPlan).not.toHaveBeenCalled();
     expect(subscriptions.renew).toHaveBeenCalledWith(7, 30);
   });
+
+  // The bug this guards: renew() flips the plan on a SEPARATE, freshly
+  // fetched Subscription instance inside subscription.service.ts, so this
+  // method's own `subscription` local variable never sees the flip. Reading
+  // subscription.plan.price for monthlyPriceAtPurchase AFTER calling renew()
+  // would record the OLD plan's price on a Payment row whose `amount`
+  // already reflects the NEW (scheduled) plan — the same inconsistency
+  // RenewalService.chargeOne's effectivePlan resolution was written to avoid
+  // for the cron path.
+  it('records monthlyPriceAtPurchase from the scheduled plan, not the pre-renewal one', async () => {
+    subscriptions = {
+      findSubscription: jest.fn().mockResolvedValue({
+        id: 7,
+        state: SubscriptionState.ACTIVE,
+        deleted: false,
+        scheduledPlanId: 1,
+        plan: { id: 2, numDays: 30, price: 15000 },
+      }),
+      activate: jest.fn().mockResolvedValue(undefined),
+      renew: jest.fn().mockResolvedValue(undefined),
+    };
+    await buildService();
+
+    await service.createManualPayment(dto, 30111222);
+
+    expect(repository.save).toHaveBeenCalledWith(
+      expect.objectContaining({ monthlyPriceAtPurchase: 6000 }),
+    );
+  });
 });
 
 describe('createFromMercadoPago', () => {

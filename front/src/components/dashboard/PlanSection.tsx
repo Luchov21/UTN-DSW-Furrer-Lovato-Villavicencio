@@ -13,9 +13,11 @@ import {
   getMySubscription,
 } from '../../services/subscription.service';
 import type { Subscription } from '../../types/subscription';
-import { formatDateOnly, dayAfterDateOnly } from '../../lib/date';
-import { formatPriceDisplay } from '../../lib/currency';
+import { formatDateOnly } from '../../lib/date';
 import { usePlanChangeQuotes } from './usePlanChangeQuotes';
+import { resolvePlanChangeAction } from './plan-change-action';
+import ScheduledPlanBanner from './ScheduledPlanBanner';
+import PlanChangeConfirmDialog from './PlanChangeConfirmDialog';
 
 const stateBadge: Record<string, string> = {
   activa: 'bg-primary/10 text-primary border-primary/30',
@@ -86,23 +88,14 @@ const PlanSection = () => {
   const confirmChange = async () => {
     if (!pendingPlan?.id) return;
 
-    // No current subscription: this is a first-time purchase (or a fresh
-    // start after a cancellation), not a change — the backend's own
-    // assessChange() treats it as "not an error, the member simply buys a
-    // term normally" (plan-change.rules.ts), and usePlanChangeQuotes never
-    // even fetches a quote for this case. Route to the normal term checkout,
-    // same as before this task.
-    if (!subscription) {
-      navigate(`/checkout?plan=${pendingPlan.id}&months=1`);
-      return;
-    }
+    const action = resolvePlanChangeAction(
+      pendingPlan.id,
+      !!subscription,
+      quotes[pendingPlan.id],
+    );
 
-    const quote = quotes[pendingPlan.id];
-
-    // An upgrade costs money and goes through checkout in plan-change mode; a
-    // downgrade or lateral move costs nothing and is applied directly.
-    if (quote?.direction === 'upgrade') {
-      navigate(`/checkout?plan=${pendingPlan.id}&mode=plan-change`);
+    if (action.type === 'checkout') {
+      navigate(action.url);
       return;
     }
 
@@ -198,30 +191,12 @@ const PlanSection = () => {
           </div>
         ) : null}
         {scheduledPlan && subscription && (
-          <div className="mt-3 flex flex-wrap items-center gap-3">
-            <p className="text-sm text-amber-400">
-              Vas a pasar a {scheduledPlan.name} el{' '}
-              {formatDateOnly(
-                dayAfterDateOnly(String(subscription.endDate).slice(0, 10)),
-              )}
-              .
-            </p>
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={handleCancelScheduled}
-              disabled={isCancellingSchedule}
-            >
-              {isCancellingSchedule ? (
-                <span className="flex items-center gap-2">
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  Cancelando...
-                </span>
-              ) : (
-                'Cancelar cambio'
-              )}
-            </Button>
-          </div>
+          <ScheduledPlanBanner
+            planName={scheduledPlan.name}
+            endDate={subscription.endDate}
+            onCancel={handleCancelScheduled}
+            isCancelling={isCancellingSchedule}
+          />
         )}
         {!subscription && (
           <p className="mt-3 text-sm text-text-muted">
@@ -261,71 +236,13 @@ const PlanSection = () => {
       </div>
 
       {pendingPlan && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
-        >
-          <Card className="w-full max-w-md hover:translate-y-0 hover:shadow-lg">
-            <h4 className="font-display text-lg font-semibold text-text">
-              Confirmar cambio de plan
-            </h4>
-            <p className="mt-3 text-sm text-text-muted">
-              {!subscription ? (
-                <>
-                  Vas a elegir{' '}
-                  <span className="font-semibold text-text">
-                    "{pendingPlan.name}"
-                  </span>{' '}
-                  ({pendingPlan.price}
-                  {pendingPlan.period}). Te llevamos al checkout para completar
-                  el pago.
-                </>
-              ) : pendingQuote?.direction === 'upgrade' ? (
-                <>
-                  Vas a pasar a{' '}
-                  <span className="font-semibold text-text">
-                    "{pendingPlan.name}"
-                  </span>{' '}
-                  por{' '}
-                  <span className="font-semibold text-text">
-                    ${formatPriceDisplay(pendingQuote.amount)}
-                  </span>
-                  , y mantenés tu vencimiento del{' '}
-                  {formatDateOnly(pendingQuote.effectiveEndDate!)}. Te llevamos
-                  al checkout para completar el pago.
-                </>
-              ) : pendingQuote?.direction === 'downgrade' ? (
-                <>
-                  Seguís con "{subscription?.plan?.name}" hasta el{' '}
-                  {formatDateOnly(pendingQuote.effectiveEndDate!)}. A partir del
-                  día siguiente pasás a{' '}
-                  <span className="font-semibold text-text">
-                    "{pendingPlan.name}"
-                  </span>
-                  . No se cobra nada ahora.
-                </>
-              ) : (
-                <>
-                  Pasás a{' '}
-                  <span className="font-semibold text-text">
-                    "{pendingPlan.name}"
-                  </span>{' '}
-                  ahora mismo, sin costo, manteniendo tu vencimiento.
-                </>
-              )}
-            </p>
-
-            <div className="mt-6 flex gap-3">
-              <Button onClick={confirmChange} className="flex-1">
-                Confirmar
-              </Button>
-              <Button variant="secondary" onClick={() => setPendingPlan(null)}>
-                Cancelar
-              </Button>
-            </div>
-          </Card>
-        </div>
+        <PlanChangeConfirmDialog
+          pendingPlan={pendingPlan}
+          subscription={subscription}
+          quote={pendingQuote}
+          onConfirm={confirmChange}
+          onCancel={() => setPendingPlan(null)}
+        />
       )}
     </div>
   );

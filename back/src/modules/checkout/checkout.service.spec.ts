@@ -503,6 +503,8 @@ describe('CheckoutService.pay', () => {
         collectionPointId: null,
         adminId: null,
         externalReference: 'flg-user-7-a1b2c3d4',
+        // null in term mode: resolveCharge only sets this for a plan change.
+        changeFromSubscriptionId: null,
       });
     });
 
@@ -596,7 +598,72 @@ describe('CheckoutService.pay', () => {
         collectionPointId: null,
         adminId: null,
         externalReference: 'flg-user-7-a1b2c3d4',
+        // 10, the subscription being replaced — resolveCharge's plan-change
+        // branch reads this straight off findChangeContext. Without it the
+        // ChargeOrder row could never be recovered as a prorated upgrade by
+        // ChargeOrderResolverAdapter if the webhook has to settle it later.
+        changeFromSubscriptionId: 10,
       });
+      jest.useRealTimers();
+    });
+  });
+
+  describe('CheckoutService.pay in plan-change mode', () => {
+    // Regression coverage for the review's Critical finding: pay()'s
+    // synchronous approval path (pay -> settle -> confirmPlanCharge) used to
+    // drop changeFromSubscriptionId/endDateOverride entirely. Since dto.months
+    // is undefined by design in plan-change mode, that made confirmPlanCharge
+    // fall into its term branch and throw NotFoundException from
+    // resolveTerm(plan, undefined, durations) — the instant AFTER Mercado
+    // Pago had already approved and taken the money. It also meant armOrder's
+    // ChargeOrder row carried changeFromSubscriptionId: null regardless, so
+    // even the webhook-recovery fallback could never fire for a real charge.
+    it('settles a prorated upgrade with the replaced subscription and its inherited end date', async () => {
+      jest.useFakeTimers().setSystemTime(new Date(2026, 0, 31));
+      subscriptions.findChangeContext.mockResolvedValue({
+        subscription: { id: 10, endDate: '2026-03-31' },
+        current: {
+          plan: { id: 1, price: 6000, numDays: 30 },
+          state: 'activa',
+          termStartDate: '2026-01-01',
+          endDate: '2026-03-31',
+          alreadyChanged: false,
+        },
+      });
+      plans.findPlan.mockResolvedValue({
+        id: 2,
+        price: 9000,
+        numDays: 30,
+        name: 'Premium',
+      });
+
+      const result = await service.pay(7, 'socio@example.com', {
+        planId: 2,
+        mode: 'plan-change',
+        cardToken: 'tok_abc',
+        paymentMethodId: 'visa',
+        paymentTypeId: 'credit_card',
+        saveCard: false,
+        acceptedTerms: true,
+      } as never);
+
+      expect(chargeOrders.createCharge).toHaveBeenCalledWith(
+        expect.objectContaining({
+          planId: 2,
+          months: 0,
+          amount: 6000,
+          changeFromSubscriptionId: 10,
+        }),
+      );
+      expect(payments.confirmPlanCharge).toHaveBeenCalledWith(
+        expect.objectContaining({
+          planId: 2,
+          amount: 6000,
+          changeFromSubscriptionId: 10,
+          endDateOverride: '2026-03-31',
+        }),
+      );
+      expect(result.status).toBe('approved');
       jest.useRealTimers();
     });
   });

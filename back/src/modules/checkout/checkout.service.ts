@@ -326,6 +326,11 @@ export class CheckoutService {
       collectionPointId: null,
       adminId: null,
       externalReference: dto.externalReference,
+      // Null for a term sale. For a plan change, resolveCharge already set
+      // this to the subscription being replaced — without it this order's
+      // row would resolve as an ordinary term purchase if the webhook ever
+      // has to recover it via ChargeOrderResolverAdapter.
+      changeFromSubscriptionId: charge.changeFromSubscriptionId,
     });
   }
 
@@ -400,6 +405,10 @@ export class CheckoutService {
       method: 'online',
       collectionPointId: null,
       adminId: null,
+      // See armOrder's identical comment: without this, a synchronous
+      // approval that fails before settle() finishes recovers via the
+      // webhook as an ordinary term order instead of a prorated upgrade.
+      changeFromSubscriptionId: charge.changeFromSubscriptionId,
     });
 
     let result: MpPaymentResult;
@@ -485,7 +494,7 @@ export class CheckoutService {
         order.externalReference,
         userId,
         dto,
-        charge.amount,
+        charge,
         planName,
         customerId,
       );
@@ -568,7 +577,7 @@ export class CheckoutService {
     externalReference: string,
     userId: number,
     dto: CheckoutDto,
-    amount: number,
+    charge: ResolvedCharge,
     planName: string,
     customerId: string | undefined,
   ): Promise<CheckoutResult> {
@@ -578,10 +587,17 @@ export class CheckoutService {
         userId,
         planId: dto.planId,
         months: dto.months,
-        amount,
+        amount: charge.amount,
         payMethod: 'mercadopago',
         registeredById: null,
         mpOrderId: result.mpOrderId,
+        // Null for a term sale, in which case confirmPlanCharge ignores both
+        // and resolves the term from months instead — see its own isPlanChange
+        // branch. For a plan change, charge (resolveCharge's own output)
+        // already carries the subscription being replaced and the end date
+        // the new one must inherit.
+        changeFromSubscriptionId: charge.changeFromSubscriptionId,
+        endDateOverride: charge.endDateOverride,
       });
 
     await this.chargeOrderService.closeAsPaid(
@@ -594,7 +610,7 @@ export class CheckoutService {
       to: subscription.user.email,
       name: subscription.user.name,
       planName: subscription.plan.name,
-      amount,
+      amount: charge.amount,
       termMonths: dto.months,
       method: 'mercadopago',
       newEndDate: subscription.endDate,
@@ -609,7 +625,7 @@ export class CheckoutService {
       paymentId: payment.id,
       newEndDate: String(subscription.endDate).slice(0, 10),
       planName,
-      amount,
+      amount: charge.amount,
       months: dto.months,
     };
   }

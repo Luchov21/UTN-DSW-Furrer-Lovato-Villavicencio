@@ -393,9 +393,19 @@ export class PaymentService {
       // prior ACTIVE row at assignment time, so there is none left to find.
       const currentPayment = await this.findCurrentTermPayment(subscription.id);
       if (currentPayment) {
+        // renew() may switch this subscription to a scheduled plan; the
+        // period length has to come from the plan the term will actually be
+        // on.
+        const nextPlan =
+          subscription.scheduledPlanId != null
+            ? ((await this.planService.findPlan(
+                subscription.scheduledPlanId,
+              )) ?? subscription.plan)
+            : subscription.plan;
+
         await this.subscriptionService.renew(
           subscription.id,
-          termMonths * subscription.plan.numDays,
+          termMonths * nextPlan.numDays,
         );
       } else {
         await this.subscriptionService.activate(

@@ -320,6 +320,102 @@ describe('createManualPayment — advance payment', () => {
   });
 });
 
+describe('createManualPayment — advance payment onto a scheduled plan', () => {
+  let service: PaymentService;
+  let repository: {
+    create: jest.Mock;
+    save: jest.Mock;
+    find: jest.Mock;
+    findOne: jest.Mock;
+  };
+  let subscriptions: {
+    findSubscription: jest.Mock;
+    activate: jest.Mock;
+    renew: jest.Mock;
+  };
+  let plans: { findPlan: jest.Mock };
+
+  const dto = { subscriptionId: 7, amount: 15000, payMethod: 'efectivo' };
+
+  // findOne backs findCurrentTermPayment: a completed row means the ACTIVE
+  // branch treats this as a genuine advance payment (renew), same as the
+  // 'advance payment' block above.
+  const buildService = async () => {
+    repository = {
+      create: jest.fn((entity: object) => entity),
+      save: jest.fn((entity: object) => Promise.resolve({ id: 1, ...entity })),
+      find: jest.fn().mockResolvedValue([]),
+      findOne: jest.fn().mockResolvedValue({ id: 42 }),
+    };
+    plans = {
+      findPlan: jest
+        .fn()
+        .mockResolvedValue({ id: 1, price: 6000, numDays: 45, name: 'Basic' }),
+    };
+
+    const moduleRef = await Test.createTestingModule({
+      providers: [
+        PaymentService,
+        { provide: getRepositoryToken(Payment), useValue: repository },
+        { provide: getDataSourceToken(), useValue: {} },
+        { provide: subscriptionService, useValue: subscriptions },
+        { provide: PlanService, useValue: plans },
+        { provide: PlanDurationService, useValue: {} },
+        {
+          provide: UserService,
+          useValue: { findUser: jest.fn().mockResolvedValue(null) },
+        },
+      ],
+    }).compile();
+
+    service = moduleRef.get(PaymentService);
+  };
+
+  // renew() itself applies the scheduled plan flip, but the DAY COUNT for the
+  // new term has to be computed from the plan the term will actually be on —
+  // otherwise a downgrade to a plan with a different numDays would extend the
+  // subscription by the wrong number of days on this very payment.
+  it("looks ahead to the scheduled plan's numDays, not the current plan's", async () => {
+    subscriptions = {
+      findSubscription: jest.fn().mockResolvedValue({
+        id: 7,
+        state: SubscriptionState.ACTIVE,
+        deleted: false,
+        scheduledPlanId: 1,
+        plan: { id: 2, numDays: 30, price: 15000 },
+      }),
+      activate: jest.fn().mockResolvedValue(undefined),
+      renew: jest.fn().mockResolvedValue(undefined),
+    };
+    await buildService();
+
+    await service.createManualPayment({ ...dto, termMonths: 2 }, 30111222);
+
+    expect(plans.findPlan).toHaveBeenCalledWith(1);
+    expect(subscriptions.renew).toHaveBeenCalledWith(7, 90);
+  });
+
+  it("keeps using the current plan's numDays when nothing is scheduled", async () => {
+    subscriptions = {
+      findSubscription: jest.fn().mockResolvedValue({
+        id: 7,
+        state: SubscriptionState.ACTIVE,
+        deleted: false,
+        scheduledPlanId: null,
+        plan: { id: 2, numDays: 30, price: 15000 },
+      }),
+      activate: jest.fn().mockResolvedValue(undefined),
+      renew: jest.fn().mockResolvedValue(undefined),
+    };
+    await buildService();
+
+    await service.createManualPayment(dto, 30111222);
+
+    expect(plans.findPlan).not.toHaveBeenCalled();
+    expect(subscriptions.renew).toHaveBeenCalledWith(7, 30);
+  });
+});
+
 describe('createFromMercadoPago', () => {
   let service: PaymentService;
   let repository: {

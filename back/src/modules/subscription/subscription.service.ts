@@ -313,6 +313,23 @@ export class subscriptionService {
       throw new NotFoundException(`La suscripción con ID: ${id} no existe.`);
     }
 
+    // A downgrade scheduled mid-term takes effect exactly here: the next term
+    // is the first one the member has not already paid for on the old plan.
+    if (subscription.scheduledPlanId != null) {
+      const scheduled = await this.planService.findPlan(
+        subscription.scheduledPlanId,
+      );
+      if (scheduled && !scheduled.deleted) {
+        subscription.planId = scheduled.id;
+        // The new term is a different plan: the old term's discount and sold
+        // price describe nothing about it, and leaving them would report the
+        // member at the old plan's MRR for the whole new term.
+        subscription.planDurationId = null;
+        subscription.soldPrice = Number(scheduled.price);
+      }
+      subscription.scheduledPlanId = null;
+    }
+
     const period = renewalPeriod(subscription.endDate, days);
     subscription.endDate = period.endDate;
     subscription.state = SubscriptionState.ACTIVE;

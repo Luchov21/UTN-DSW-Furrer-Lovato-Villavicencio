@@ -566,6 +566,66 @@ describe('subscriptionService', () => {
     });
   });
 
+  describe('renew with a scheduled downgrade', () => {
+    it('opens the next term on the scheduled plan and clears the field', async () => {
+      const sub = {
+        id: 10,
+        planId: 2,
+        scheduledPlanId: 1,
+        endDate: '2026-03-31',
+        state: SubscriptionState.ACTIVE,
+      };
+      service.findSubscription = jest.fn().mockResolvedValue(sub);
+
+      await service.renew(10, 30);
+
+      expect(sub.planId).toBe(1);
+      expect(sub.scheduledPlanId).toBeNull();
+      expect(sub.endDate).toBe('2026-04-30');
+    });
+
+    it('resets the term pricing fields, since the new term is a different plan', async () => {
+      // Leaving soldPrice and planDurationId from the old plan would report the
+      // member at the old plan's MRR for the whole new term.
+      const sub = {
+        id: 10,
+        planId: 2,
+        scheduledPlanId: 1,
+        endDate: '2026-03-31',
+        state: SubscriptionState.ACTIVE,
+        soldPrice: 9000,
+        planDurationId: 4,
+      };
+      service.findSubscription = jest.fn().mockResolvedValue(sub);
+      planService.findPlan.mockResolvedValue({
+        id: 1,
+        price: 6000,
+        numDays: 30,
+        deleted: false,
+      });
+
+      await service.renew(10, 30);
+
+      expect(sub.soldPrice).toBe(6000);
+      expect(sub.planDurationId).toBeNull();
+    });
+
+    it('leaves a subscription with no scheduled change exactly as it was', async () => {
+      const sub = {
+        id: 10,
+        planId: 2,
+        scheduledPlanId: null,
+        endDate: '2026-03-31',
+        state: SubscriptionState.ACTIVE,
+      };
+      service.findSubscription = jest.fn().mockResolvedValue(sub);
+
+      await service.renew(10, 30);
+
+      expect(sub.planId).toBe(2);
+    });
+  });
+
   describe('findDueForRenewal', () => {
     it('queries autoRenew, ACTIVE, non-deleted subscriptions ending on one of the given dates', async () => {
       const dueDates = ['2026-09-11', '2026-09-12', '2026-09-13'];

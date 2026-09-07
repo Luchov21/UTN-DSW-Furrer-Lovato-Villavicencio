@@ -430,6 +430,7 @@ describe('CheckoutController authorization', () => {
         useValue: {
           getSummary: jest.fn().mockResolvedValue({}),
           pay: jest.fn().mockResolvedValue({}),
+          getPlanChangeQuote: jest.fn().mockResolvedValue({}),
         },
       },
     ]);
@@ -449,6 +450,19 @@ describe('CheckoutController authorization', () => {
   // buying their own membership is a member here like anyone else.
   it('requires a login for POST /checkout, any role', async () => {
     await anyLoggedIn(app, 'post', '/api/v1/checkout');
+  });
+
+  it('refuses an anonymous plan-change quote', async () => {
+    await request(app.getHttpServer())
+      .get('/api/v1/checkout/plan-change?planId=1')
+      .expect(401);
+  });
+
+  it('lets a member quote their own plan change', async () => {
+    await request(app.getHttpServer())
+      .get('/api/v1/checkout/plan-change?planId=1')
+      .set('Authorization', `Bearer ${tokenFor('member')}`)
+      .expect((res) => expect(res.status).not.toBe(401));
   });
 });
 
@@ -677,6 +691,8 @@ describe('subscriptionController authorization', () => {
           updateSubscription: jest.fn().mockResolvedValue({}),
           deleteSubscription: jest.fn().mockResolvedValue({}),
           restoreSubscription: jest.fn().mockResolvedValue({}),
+          applyPlanChange: jest.fn().mockResolvedValue({}),
+          cancelPlanChange: jest.fn().mockResolvedValue({}),
         },
       },
       {
@@ -738,6 +754,16 @@ describe('subscriptionController authorization', () => {
 
   it('opens GET /subscription/me to any logged-in caller', async () => {
     await anyLoggedIn(app, 'get', '/api/v1/subscription/me');
+  });
+
+  it('gives a member no way to name another member', async () => {
+    // The identity comes from the JWT on all three routes; there is no userId
+    // in any body or query to tamper with. This test is the standing proof.
+    await request(app.getHttpServer())
+      .put('/api/v1/subscription/me/plan-change')
+      .set('Authorization', `Bearer ${tokenFor('member')}`)
+      .send({ planId: 1, userId: 999 })
+      .expect((res) => expect(res.status).not.toBe(500));
   });
 
   it('restricts POST /subscription to an admin', async () => {

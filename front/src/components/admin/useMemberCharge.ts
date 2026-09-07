@@ -194,10 +194,22 @@ export const useMemberCharge = (
       .then((nextQuote) => {
         if (!isCurrent) return;
         setQuote(nextQuote);
-        // Pre-fill only. The admin can overwrite it, exactly as they already
-        // can with a plan's list price — a front-desk discount is a normal
-        // thing here.
-        setAmountText(formatPriceDisplay(amountForPlanChangeQuote(nextQuote)));
+        // Pre-fill only when the admin actually picked this plan by hand.
+        // An auto-selected plan (planTouchedRef still false — defaultPlanIdFor
+        // opened the picker on the member's scheduledPlanId or their own
+        // current plan) is, by construction, never an upgrade: applyPlanChange
+        // only ever sets scheduledPlanId for a downgrade, an upgrade goes
+        // through checkout instead. assessChange returns amount: 0 for every
+        // downgrade, and often eligible: false too (too_close_to_end) for a
+        // member walking in at/after their term's end — the routine renewal
+        // this whole feature exists to help with. Overwriting amountText here
+        // would clobber the synchronous resolvedPrice effect's already-correct
+        // list-price value with 0, forcing the admin to retype the price on
+        // every ordinary renewal (round 1 review finding). A manually-picked
+        // plan change is unaffected: it still pre-fills exactly as shipped.
+        if (planTouchedRef.current) {
+          setAmountText(formatPriceDisplay(amountForPlanChangeQuote(nextQuote)));
+        }
       })
       .catch((err: unknown) => {
         if (!isCurrent) return;

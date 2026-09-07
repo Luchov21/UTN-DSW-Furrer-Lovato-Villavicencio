@@ -3,9 +3,18 @@
 // router state survives neither.
 const ALLOWED_MONTHS = [1, 3, 6, 12];
 
+// Absent (the default) or anything unrecognized reads as a term purchase —
+// the same allow-list-with-fallback the checkout DTOs use server-side, so a
+// stale/hand-edited link can never fall through to a mode this page doesn't
+// know how to render.
+const ALLOWED_MODES = ['term', 'plan-change'] as const;
+
+export type CheckoutMode = (typeof ALLOWED_MODES)[number];
+
 export interface CheckoutParams {
   planId: number | null;
   months: number;
+  mode: CheckoutMode;
 }
 
 export function readCheckoutParams(search: string): CheckoutParams {
@@ -17,7 +26,10 @@ export function readCheckoutParams(search: string): CheckoutParams {
   const rawMonths = Number(params.get('months'));
   const months = ALLOWED_MONTHS.includes(rawMonths) ? rawMonths : 1;
 
-  return { planId, months };
+  const rawMode = params.get('mode');
+  const mode = ALLOWED_MODES.find((allowed) => allowed === rawMode) ?? 'term';
+
+  return { planId, months, mode };
 }
 
 /**
@@ -41,6 +53,8 @@ export function safeReturnTo(value: string | null): string {
 export function checkoutWalletUrl(
   planId: number | null,
   months: number,
+  mode: CheckoutMode = 'term',
 ): string {
-  return `/checkout/wallet?plan=${planId ?? ''}&months=${months}`;
+  const base = `/checkout/wallet?plan=${planId ?? ''}&months=${months}`;
+  return mode === 'plan-change' ? `${base}&mode=plan-change` : base;
 }

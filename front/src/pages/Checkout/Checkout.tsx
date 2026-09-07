@@ -8,7 +8,11 @@ import {
   checkoutWalletUrl,
   readCheckoutParams,
 } from '../../components/checkout/useCheckoutParams';
-import { getCheckoutSummary } from '../../services/checkout.service';
+import {
+  getCheckoutSummary,
+  getPlanChangeQuote,
+  planChangeQuoteToSummary,
+} from '../../services/checkout.service';
 import { useAuth } from '../../context/useAuth';
 import type { CheckoutSummary } from '../../types/checkout';
 
@@ -16,30 +20,34 @@ function Checkout() {
   const navigate = useNavigate();
   const location = useLocation();
   const { isAuthenticated, isProfileComplete } = useAuth();
-  const { planId, months } = readCheckoutParams(location.search);
+  const { planId, months, mode } = readCheckoutParams(location.search);
 
   const [summary, setSummary] = useState<CheckoutSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
-  const walletUrl = checkoutWalletUrl(planId, months);
+  const walletUrl = checkoutWalletUrl(planId, months, mode);
 
-  const loadSummary = useCallback(
-    (nextMonths: number) => {
-      if (!planId) return;
-      getCheckoutSummary(planId, nextMonths)
-        .then(setSummary)
-        .catch((err: unknown) =>
-          setError(
-            err instanceof Error
-              ? err.message
-              : 'No se pudo calcular el precio del plan.',
-          ),
-        )
-        .finally(() => setIsLoading(false));
-    },
-    [planId, setSummary, setError, setIsLoading],
-  );
+  const loadSummary = useCallback(() => {
+    if (!planId) return;
+    // A plan change never buys a term: it prices the member-specific
+    // proration off their live subscription instead of a (planId, months)
+    // term price.
+    const request =
+      mode === 'plan-change'
+        ? getPlanChangeQuote(planId).then(planChangeQuoteToSummary)
+        : getCheckoutSummary(planId, months);
+    request
+      .then(setSummary)
+      .catch((err: unknown) =>
+        setError(
+          err instanceof Error
+            ? err.message
+            : 'No se pudo calcular el precio del plan.',
+        ),
+      )
+      .finally(() => setIsLoading(false));
+  }, [planId, months, mode, setSummary, setError, setIsLoading]);
 
   useEffect(() => {
     // A checkout with no plan has nothing to sell; send them back to pick one
@@ -48,8 +56,8 @@ function Checkout() {
       navigate('/membership', { replace: true });
       return;
     }
-    loadSummary(months);
-  }, [planId, months, loadSummary, navigate]);
+    loadSummary();
+  }, [planId, months, mode, loadSummary, navigate]);
 
   useEffect(() => {
     if (!isAuthenticated) return;

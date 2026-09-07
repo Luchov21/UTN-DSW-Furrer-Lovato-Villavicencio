@@ -44,14 +44,18 @@ export const submitCheckout = async (
   }
 };
 
+// `months` is omitted (not just falsy) for a plan-change preference: the
+// backend DTO only validates it in term mode, and axios drops an `undefined`
+// property from the JSON body entirely rather than sending a meaningless one.
 export const createCheckoutPreference = async (
   planId: number,
-  months: number,
+  months?: number,
+  mode?: CheckoutPayload['mode'],
 ): Promise<CheckoutPreference> => {
   try {
     const { data } = await api.post<CheckoutPreference>(
       '/checkout/preference',
-      { planId, months },
+      { planId, months, mode },
     );
     return data;
   } catch (error) {
@@ -67,7 +71,8 @@ export const createCheckoutPreference = async (
 // with nothing armed on our side.
 export const armCheckout = async (payload: {
   planId: number;
-  months: number;
+  months?: number;
+  mode?: CheckoutPayload['mode'];
   externalReference: string;
 }): Promise<void> => {
   try {
@@ -97,6 +102,34 @@ export const getPlanChangeQuote = async (
       { cause: error },
     );
   }
+};
+
+// Adapts a plan-change quote into the CheckoutSummary shape the checkout
+// pages' OrderSummary rail already knows how to render, so those pages don't
+// need a second summary component for one field. Every displayed number is
+// `quote.amount` verbatim — never recomputed here — because the backend
+// (resolveCharge) is the only place allowed to price a plan change. Throws
+// for an ineligible quote so callers can treat it exactly like a summary
+// fetch failure (same catch branch, same "couldn't price this" error path)
+// instead of rendering a payable amount for a change the backend would
+// refuse.
+export const planChangeQuoteToSummary = (
+  quote: PlanChangeQuote,
+): CheckoutSummary => {
+  if (!quote.eligible) {
+    throw new Error(quote.message ?? 'No se puede aplicar este cambio de plan.');
+  }
+  return {
+    planId: quote.planId,
+    planName: quote.planName,
+    months: 1,
+    monthlyPrice: quote.amount,
+    subtotal: quote.amount,
+    discount: 0,
+    total: quote.amount,
+    currency: 'ARS',
+    availableMonths: [],
+  };
 };
 
 export const getCheckoutStatus = async (

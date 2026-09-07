@@ -19,6 +19,8 @@ import {
   armCheckout,
   createCheckoutPreference,
   getCheckoutSummary,
+  getPlanChangeQuote,
+  planChangeQuoteToSummary,
   submitCheckout,
 } from '../../services/checkout.service';
 import { getMySavedCard } from '../../services/savedCard.service';
@@ -36,11 +38,12 @@ const TERMS_REQUIRED_MESSAGE =
 function CheckoutWallet() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { planId, months } = readCheckoutParams(location.search);
-  // Identifies which (planId, months) pair the page is currently showing
-  // data for. Compared against `loadedFor` below to derive `isLoading` — see
-  // that comparison for why this can't just be a manually toggled boolean.
-  const requestKey = `${planId}:${months}`;
+  const { planId, months, mode } = readCheckoutParams(location.search);
+  // Identifies which (planId, months, mode) triple the page is currently
+  // showing data for. Compared against `loadedFor` below to derive
+  // `isLoading` — see that comparison for why this can't just be a manually
+  // toggled boolean.
+  const requestKey = `${planId}:${months}:${mode}`;
 
   const [summary, setSummary] = useState<CheckoutSummary | null>(null);
   const [preference, setPreference] = useState<CheckoutPreference | null>(null);
@@ -96,16 +99,32 @@ function CheckoutWallet() {
       navigate('/membership', { replace: true });
       return;
     }
+    // A plan change never buys a term: it prices the member-specific
+    // proration off their live subscription instead of a (planId, months)
+    // term price, and the preference it arms carries no `months` either.
+    const summaryRequest =
+      mode === 'plan-change'
+        ? getPlanChangeQuote(planId).then(planChangeQuoteToSummary)
+        : getCheckoutSummary(planId, months);
+    const preferenceMonths = mode === 'plan-change' ? undefined : months;
+
     Promise.allSettled([
-      getCheckoutSummary(planId, months),
+      summaryRequest,
       getMySavedCard(),
-      createCheckoutPreference(planId, months),
+      createCheckoutPreference(planId, preferenceMonths, mode),
     ])
       .then(([summaryRes, cardRes, preferenceRes]) => {
         if (summaryRes.status === 'fulfilled') {
           setSummary(summaryRes.value);
         } else {
-          setError('No se pudo calcular el precio del plan.');
+          // planChangeQuoteToSummary throws the quote's own Spanish message
+          // for an ineligible change (e.g. "ya cambiaste de plan esta
+          // semana") — surface that instead of a generic pricing failure.
+          setError(
+            summaryRes.reason instanceof Error
+              ? summaryRes.reason.message
+              : 'No se pudo calcular el precio del plan.',
+          );
         }
         if (cardRes.status === 'rejected') {
           // Not fatal: the member can still pay with a new card. But mapping
@@ -143,7 +162,7 @@ function CheckoutWallet() {
       // this closure at the top of this render — reaches `loadedFor`,
       // `isLoading` stays true and the Brick stays hidden.
       .finally(() => setLoadedFor(requestKey));
-  }, [planId, months, navigate, requestKey]);
+  }, [planId, months, mode, navigate, requestKey]);
 
   const pay = useCallback(
     async (card?: {
@@ -171,7 +190,11 @@ function CheckoutWallet() {
       try {
         const response = await submitCheckout({
           planId,
-          months,
+          // No `months` for a plan change: it has no term to buy, and the
+          // backend only validates this field in term mode. The amount is
+          // never sent either way — resolveCharge prices it server-side.
+          months: mode === 'plan-change' ? undefined : months,
+          mode,
           cardToken: card?.token,
           paymentMethodId: card?.paymentMethodId,
           paymentTypeId: card?.paymentTypeId,
@@ -189,7 +212,7 @@ function CheckoutWallet() {
         setIsPaying(false);
       }
     },
-    [planId, months, useSavedCard, saveCard, termsAccepted],
+    [planId, months, mode, useSavedCard, saveCard, termsAccepted],
   );
 
   // A charge in flight must not be abandoned by a stray back/refresh.
@@ -250,7 +273,9 @@ function CheckoutWallet() {
     try {
       await armCheckout({
         planId,
-        months,
+        // See submitCheckout above: a plan change carries no `months`.
+        months: mode === 'plan-change' ? undefined : months,
+        mode,
         externalReference: preference.externalReference,
       });
     } catch (err) {
@@ -259,7 +284,15 @@ function CheckoutWallet() {
       setError(message);
       throw err;
     }
-  }, [planId, months, preference, summary, preferenceForMonths, termsAccepted]);
+  }, [
+    planId,
+    months,
+    mode,
+    preference,
+    summary,
+    preferenceForMonths,
+    termsAccepted,
+  ]);
 
   if (result?.status === 'approved') {
     return (
@@ -292,12 +325,18 @@ function CheckoutWallet() {
       ) : (
         <Card className="hover:translate-y-0 hover:shadow-lg">
           <div className="space-y-5">
-            <DurationSelector
-              summary={summary}
-              selectedMonths={months}
-              onChange={handleMonthsChange}
-              disabled={isPaying || isLoading}
-            />
+            {/* A plan change never buys a term — offering 3/6/12 months here
+                would offer something the backend refuses (@ValidateIf skips
+                `months` entirely in plan-change mode), so the selector is
+                hidden outright rather than disabled. */}
+            {mode === 'term' && (
+              <DurationSelector
+                summary={summary}
+                selectedMonths={months}
+                onChange={handleMonthsChange}
+                disabled={isPaying || isLoading}
+              />
+            )}
 
             <FormAlert type="error" message={error} />
 

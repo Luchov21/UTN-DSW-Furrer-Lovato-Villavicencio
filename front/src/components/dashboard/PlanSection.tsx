@@ -7,9 +7,15 @@ import FormAlert from '../common/FormAlert';
 import PlanCard from '../plans/PlanCard';
 import { enrichBackendPlan, type MembershipPlan } from '../plans/plans.data';
 import { getPlans } from '../../services/plan.service';
-import { getMySubscription } from '../../services/subscription.service';
+import {
+  applyPlanChange,
+  cancelScheduledPlanChange,
+  getMySubscription,
+} from '../../services/subscription.service';
 import type { Subscription } from '../../types/subscription';
-import { formatDateOnly } from '../../lib/date';
+import { formatDateOnly, dayAfterDateOnly } from '../../lib/date';
+import { formatPriceDisplay } from '../../lib/currency';
+import { usePlanChangeQuotes } from './usePlanChangeQuotes';
 
 const stateBadge: Record<string, string> = {
   activa: 'bg-primary/10 text-primary border-primary/30',
@@ -28,6 +34,9 @@ const PlanSection = () => {
   const [pendingPlan, setPendingPlan] = useState<MembershipPlan | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionSuccess, setActionSuccess] = useState<string | null>(null);
+  const [isCancellingSchedule, setIsCancellingSchedule] = useState(false);
+
+  const { quotes } = usePlanChangeQuotes(plans, !!subscription);
 
   // Every setState lives in an async callback, so the effect below only starts
   // the requests instead of updating state while React renders.
@@ -74,9 +83,62 @@ const PlanSection = () => {
     setPendingPlan(plan);
   };
 
-  const confirmChange = () => {
+  const confirmChange = async () => {
     if (!pendingPlan?.id) return;
-    navigate(`/checkout?plan=${pendingPlan.id}&months=1`);
+
+    // No current subscription: this is a first-time purchase (or a fresh
+    // start after a cancellation), not a change — the backend's own
+    // assessChange() treats it as "not an error, the member simply buys a
+    // term normally" (plan-change.rules.ts), and usePlanChangeQuotes never
+    // even fetches a quote for this case. Route to the normal term checkout,
+    // same as before this task.
+    if (!subscription) {
+      navigate(`/checkout?plan=${pendingPlan.id}&months=1`);
+      return;
+    }
+
+    const quote = quotes[pendingPlan.id];
+
+    // An upgrade costs money and goes through checkout in plan-change mode; a
+    // downgrade or lateral move costs nothing and is applied directly.
+    if (quote?.direction === 'upgrade') {
+      navigate(`/checkout?plan=${pendingPlan.id}&mode=plan-change`);
+      return;
+    }
+
+    try {
+      const result = await applyPlanChange(pendingPlan.id);
+      setActionSuccess(
+        result.direction === 'lateral'
+          ? `Ya estás en ${pendingPlan.name}.`
+          : `Vas a pasar a ${pendingPlan.name} el ${formatDateOnly(result.effectiveFrom)}.`,
+      );
+      setPendingPlan(null);
+      reload();
+    } catch (err) {
+      setActionError(
+        err instanceof Error ? err.message : 'No se pudo cambiar el plan.',
+      );
+    }
+  };
+
+  const handleCancelScheduled = async () => {
+    setActionError(null);
+    setActionSuccess(null);
+    setIsCancellingSchedule(true);
+    try {
+      await cancelScheduledPlanChange();
+      setActionSuccess('Cancelaste el cambio de plan programado.');
+      reload();
+    } catch (err) {
+      setActionError(
+        err instanceof Error
+          ? err.message
+          : 'No se pudo cancelar el cambio de plan programado.',
+      );
+    } finally {
+      setIsCancellingSchedule(false);
+    }
   };
 
   if (isLoading) {
@@ -102,6 +164,10 @@ const PlanSection = () => {
 
   const currentPlanId = subscription?.planId;
   const currentState = (subscription?.state ?? '').toLowerCase();
+  const scheduledPlan = plans.find(
+    (p) => p.id === subscription?.scheduledPlanId,
+  );
+  const pendingQuote = pendingPlan?.id ? quotes[pendingPlan.id] : undefined;
 
   return (
     <div className="space-y-8">
@@ -130,7 +196,34 @@ const PlanSection = () => {
               {subscription.state ?? 'Sin estado'}
             </span>
           </div>
-        ) : (
+        ) : null}
+        {scheduledPlan && subscription && (
+          <div className="mt-3 flex flex-wrap items-center gap-3">
+            <p className="text-sm text-amber-400">
+              Vas a pasar a {scheduledPlan.name} el{' '}
+              {formatDateOnly(
+                dayAfterDateOnly(String(subscription.endDate).slice(0, 10)),
+              )}
+              .
+            </p>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={handleCancelScheduled}
+              disabled={isCancellingSchedule}
+            >
+              {isCancellingSchedule ? (
+                <span className="flex items-center gap-2">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Cancelando...
+                </span>
+              ) : (
+                'Cancelar cambio'
+              )}
+            </Button>
+          </div>
+        )}
+        {!subscription && (
           <p className="mt-3 text-sm text-text-muted">
             Todavía no tenés un plan activo. Elegí uno abajo para empezar.
           </p>
@@ -160,6 +253,7 @@ const PlanSection = () => {
                   plan.id === currentPlanId &&
                   currentState === 'activa'
                 }
+                quote={plan.id ? quotes[plan.id] : undefined}
               />
             ))}
           </div>
@@ -177,17 +271,49 @@ const PlanSection = () => {
               Confirmar cambio de plan
             </h4>
             <p className="mt-3 text-sm text-text-muted">
-              Vas a pasar{' '}
-              {subscription
-                ? `de "${subscription.plan?.name ?? 'tu plan actual'}" `
-                : ''}
-              a{' '}
-              <span className="font-semibold text-text">
-                "{pendingPlan.name}"
-              </span>{' '}
-              ({pendingPlan.price}
-              {pendingPlan.period}). Te llevamos al checkout para completar el
-              pago; el cambio se aplica cuando se acredite.
+              {!subscription ? (
+                <>
+                  Vas a elegir{' '}
+                  <span className="font-semibold text-text">
+                    "{pendingPlan.name}"
+                  </span>{' '}
+                  ({pendingPlan.price}
+                  {pendingPlan.period}). Te llevamos al checkout para completar
+                  el pago.
+                </>
+              ) : pendingQuote?.direction === 'upgrade' ? (
+                <>
+                  Vas a pasar a{' '}
+                  <span className="font-semibold text-text">
+                    "{pendingPlan.name}"
+                  </span>{' '}
+                  por{' '}
+                  <span className="font-semibold text-text">
+                    ${formatPriceDisplay(pendingQuote.amount)}
+                  </span>
+                  , y mantenés tu vencimiento del{' '}
+                  {formatDateOnly(pendingQuote.effectiveEndDate!)}. Te llevamos
+                  al checkout para completar el pago.
+                </>
+              ) : pendingQuote?.direction === 'downgrade' ? (
+                <>
+                  Seguís con "{subscription?.plan?.name}" hasta el{' '}
+                  {formatDateOnly(pendingQuote.effectiveEndDate!)}. A partir del
+                  día siguiente pasás a{' '}
+                  <span className="font-semibold text-text">
+                    "{pendingPlan.name}"
+                  </span>
+                  . No se cobra nada ahora.
+                </>
+              ) : (
+                <>
+                  Pasás a{' '}
+                  <span className="font-semibold text-text">
+                    "{pendingPlan.name}"
+                  </span>{' '}
+                  ahora mismo, sin costo, manteniendo tu vencimiento.
+                </>
+              )}
             </p>
 
             <div className="mt-6 flex gap-3">

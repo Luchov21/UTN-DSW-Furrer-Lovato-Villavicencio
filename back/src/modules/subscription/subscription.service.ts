@@ -21,6 +21,12 @@ import { UserService } from '../user/user.service';
 import { ResolvedTerm } from '../plan/plan-duration.rules';
 import type { CurrentTerm } from './plan-change.rules';
 import {
+  assessChange,
+  blockMessage,
+  PLAN_CHANGE_LOCK_DAYS,
+} from './plan-change.rules';
+import {
+  addDays,
   dayAfter,
   isCurrentOn,
   renewalPeriod,
@@ -396,6 +402,91 @@ export class subscriptionService {
         alreadyChanged: live.changedFromSubscriptionId != null,
       },
     };
+  }
+
+  /**
+   * The money-free half of a plan change: schedules a downgrade for the end of
+   * the term, or applies a lateral move on the spot.
+   *
+   * Refuses an upgrade outright. An upgrade is priced and must go through
+   * checkout — reaching this route with one would hand the member a dearer
+   * plan for free, which is the one failure mode this whole feature must not
+   * have.
+   */
+  async applyPlanChange(userId: number, planId: number) {
+    const plan = await this.planService.findPlan(planId);
+    if (!plan || plan.deleted) {
+      throw new NotFoundException(`El plan con ID: ${planId} no existe.`);
+    }
+
+    const context = await this.findChangeContext(userId);
+    const assessment = assessChange({
+      next: plan,
+      current: context?.current ?? null,
+      today: toDateOnly(new Date()),
+    });
+
+    if (!assessment.eligible) {
+      // Same instanceof guard as CheckoutService.getPlanChangeQuote: this is
+      // typed Date | string, and MySQL always hands back a string today, but
+      // toDateOnly itself only accepts a Date.
+      const termStartDate = context
+        ? context.current.termStartDate instanceof Date
+          ? toDateOnly(context.current.termStartDate)
+          : String(context.current.termStartDate).slice(0, 10)
+        : null;
+
+      throw new ConflictException(
+        blockMessage(assessment.reason, {
+          unlocksOn: termStartDate
+            ? addDays(termStartDate, PLAN_CHANGE_LOCK_DAYS)
+            : undefined,
+        }),
+      );
+    }
+
+    if (assessment.direction === 'upgrade') {
+      throw new ConflictException(
+        'Mejorar de plan tiene un costo. Completá el pago para aplicarlo.',
+      );
+    }
+
+    const live = context!.subscription;
+
+    if (assessment.direction === 'lateral') {
+      live.planId = planId;
+      live.scheduledPlanId = null;
+    } else {
+      live.scheduledPlanId = planId;
+    }
+
+    await this.subscriptionRepository.save(live);
+    return {
+      direction: assessment.direction,
+      effectiveFrom:
+        assessment.direction === 'lateral'
+          ? toDateOnly(new Date())
+          : addDays(
+              live.endDate instanceof Date
+                ? toDateOnly(live.endDate)
+                : String(live.endDate).slice(0, 10),
+              1,
+            ),
+      subscription: await this.findSubscription(live.id),
+    };
+  }
+
+  // Clears a scheduled downgrade set by applyPlanChange. The live term itself
+  // is untouched — this only cancels what would have happened at renewal.
+  async cancelScheduledPlanChange(userId: number) {
+    const context = await this.findChangeContext(userId);
+    if (!context || context.subscription.scheduledPlanId == null) {
+      throw new NotFoundException('No tenés un cambio de plan programado.');
+    }
+
+    context.subscription.scheduledPlanId = null;
+    await this.subscriptionRepository.save(context.subscription);
+    return this.findSubscription(context.subscription.id);
   }
 
   // Moves subscriptions that have run out to INACTIVE, nightly.

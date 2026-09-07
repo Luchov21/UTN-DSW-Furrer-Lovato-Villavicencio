@@ -17,6 +17,7 @@ import { SKIP_ALL_THROTTLERS } from '../../auth/auth.throttle';
 import { SubscriptionDto } from './dto/subscription-dto';
 import { ChangePlanDto } from './dto/change-plan-dto';
 import { SetAutoRenewDto } from './dto/set-auto-renew-dto';
+import { PlanChangeDto } from './dto/plan-change-dto';
 import { subscriptionService } from './subscription.service';
 import { SavedCardService } from '../savedCard/savedCard.service';
 import { isChargeable } from '../savedCard/savedCard.rules';
@@ -99,6 +100,27 @@ export class subscriptionController {
       subscription.id,
       dto.autoRenew,
     );
+  }
+
+  // Self-service, and free by construction: this route applies a lateral move
+  // or schedules a downgrade. An upgrade is refused here and must be paid
+  // through POST /checkout in plan-change mode — see applyPlanChange.
+  //
+  // Declared above the generic @Delete('/:id')/@Put() routes below, same
+  // reason as by-user/:id above: 'me' must never be parsed as a numeric id.
+  @Put('me/plan-change')
+  @Auth(Role.USER)
+  applyPlanChange(
+    @ActiveUser() user: UserActiveInterface,
+    @Body() dto: PlanChangeDto,
+  ) {
+    return this.subscriptionService.applyPlanChange(user.sub, dto.planId);
+  }
+
+  @Delete('me/plan-change')
+  @Auth(Role.USER)
+  cancelScheduledPlanChange(@ActiveUser() user: UserActiveInterface) {
+    return this.subscriptionService.cancelScheduledPlanChange(user.sub);
   }
 
   @Post()

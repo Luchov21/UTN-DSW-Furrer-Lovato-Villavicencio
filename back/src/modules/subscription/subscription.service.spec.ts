@@ -1,4 +1,4 @@
-import { ConflictException } from '@nestjs/common';
+import { ConflictException, NotFoundException } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { getDataSourceToken, getRepositoryToken } from '@nestjs/typeorm';
 import { EntityManager, In } from 'typeorm';
@@ -727,6 +727,201 @@ describe('subscriptionService', () => {
         'La suscripción con ID: 999 no existe.',
       );
       expect(subscriptionRepository.save).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('applyPlanChange', () => {
+    // Pinned to Jan 31, 2026, same as the identical fixtures in
+    // checkout.service.spec.ts: 30 days after termStartDate (past the lock)
+    // and 60 days before endDate (past the too-close-to-end floor). Without
+    // pinning, applyPlanChange's `today: toDateOnly(new Date())` reads the
+    // real clock, and the moment the real date passes endDate every one of
+    // these fixtures starts reading as 'too_close_to_end' instead of the
+    // branch under test.
+    it('schedules a downgrade without touching the current term', async () => {
+      jest.useFakeTimers().setSystemTime(new Date(2026, 0, 31));
+      const live = {
+        id: 10,
+        planId: 2,
+        endDate: '2026-03-31',
+        state: 'activa',
+        scheduledPlanId: null,
+      };
+      service.findChangeContext = jest.fn().mockResolvedValue({
+        subscription: live,
+        current: {
+          plan: { id: 2, price: 9000, numDays: 30 },
+          state: 'activa',
+          termStartDate: '2026-01-01',
+          endDate: '2026-03-31',
+          alreadyChanged: false,
+        },
+      });
+      planService.findPlan.mockResolvedValue({
+        id: 1,
+        price: 6000,
+        numDays: 30,
+        name: 'Basic',
+      });
+
+      const result = await service.applyPlanChange(7, 1);
+
+      expect(result.direction).toBe('downgrade');
+      expect(live.scheduledPlanId).toBe(1);
+      expect(live.planId).toBe(2); // current plan untouched
+      expect(live.endDate).toBe('2026-03-31');
+      jest.useRealTimers();
+    });
+
+    it('applies a lateral move immediately', async () => {
+      jest.useFakeTimers().setSystemTime(new Date(2026, 0, 31));
+      const live = {
+        id: 10,
+        planId: 2,
+        endDate: '2026-03-31',
+        state: 'activa',
+        scheduledPlanId: null,
+      };
+      service.findChangeContext = jest.fn().mockResolvedValue({
+        subscription: live,
+        current: {
+          plan: { id: 2, price: 9000, numDays: 30 },
+          state: 'activa',
+          termStartDate: '2026-01-01',
+          endDate: '2026-03-31',
+          alreadyChanged: false,
+        },
+      });
+      // 13500 over 45 days is 300/day, the same daily rate as 9000 over 30.
+      planService.findPlan.mockResolvedValue({
+        id: 4,
+        price: 13500,
+        numDays: 45,
+        name: 'Flex',
+      });
+
+      const result = await service.applyPlanChange(7, 4);
+
+      expect(result.direction).toBe('lateral');
+      expect(live.planId).toBe(4);
+      expect(live.scheduledPlanId).toBeNull();
+      expect(live.endDate).toBe('2026-03-31');
+      jest.useRealTimers();
+    });
+
+    it('refuses an upgrade, which must be paid for', async () => {
+      // An upgrade reaching this free route would grant a dearer plan for
+      // nothing. This is the security boundary of the whole feature.
+      jest.useFakeTimers().setSystemTime(new Date(2026, 0, 31));
+      const live = {
+        id: 10,
+        planId: 1,
+        endDate: '2026-03-31',
+        state: 'activa',
+        scheduledPlanId: null,
+      };
+      service.findChangeContext = jest.fn().mockResolvedValue({
+        subscription: live,
+        current: {
+          plan: { id: 1, price: 6000, numDays: 30 },
+          state: 'activa',
+          termStartDate: '2026-01-01',
+          endDate: '2026-03-31',
+          alreadyChanged: false,
+        },
+      });
+      planService.findPlan.mockResolvedValue({
+        id: 2,
+        price: 9000,
+        numDays: 30,
+        name: 'Premium',
+      });
+
+      await expect(service.applyPlanChange(7, 2)).rejects.toThrow(
+        'Mejorar de plan tiene un costo. Completá el pago para aplicarlo.',
+      );
+      expect(live.planId).toBe(1);
+      expect(live.scheduledPlanId).toBeNull();
+      jest.useRealTimers();
+    });
+
+    it('refuses with the Spanish reason when the term is still locked', async () => {
+      jest.useFakeTimers().setSystemTime(new Date(2026, 0, 10));
+      const live = {
+        id: 10,
+        planId: 2,
+        endDate: '2026-03-31',
+        state: 'activa',
+        scheduledPlanId: null,
+      };
+      service.findChangeContext = jest.fn().mockResolvedValue({
+        subscription: live,
+        current: {
+          plan: { id: 2, price: 9000, numDays: 30 },
+          state: 'activa',
+          termStartDate: '2026-01-01',
+          endDate: '2026-03-31',
+          alreadyChanged: false,
+        },
+      });
+      planService.findPlan.mockResolvedValue({
+        id: 1,
+        price: 6000,
+        numDays: 30,
+        name: 'Basic',
+      });
+
+      await expect(service.applyPlanChange(7, 1)).rejects.toThrow(
+        'Podés cambiar de plan a partir del 31/01/2026.',
+      );
+      expect(live.scheduledPlanId).toBeNull();
+      jest.useRealTimers();
+    });
+  });
+
+  describe('cancelScheduledPlanChange', () => {
+    it('clears the scheduled plan', async () => {
+      const live = {
+        id: 10,
+        planId: 2,
+        endDate: '2026-03-31',
+        state: 'activa',
+        scheduledPlanId: 1,
+      };
+      service.findChangeContext = jest
+        .fn()
+        .mockResolvedValue({ subscription: live, current: {} });
+      service.findSubscription = jest.fn().mockResolvedValue(live);
+
+      await service.cancelScheduledPlanChange(7);
+
+      expect(live.scheduledPlanId).toBeNull();
+      expect(subscriptionRepository.save).toHaveBeenCalledWith(live);
+    });
+
+    it('404s when nothing is scheduled', async () => {
+      const live = {
+        id: 10,
+        planId: 2,
+        endDate: '2026-03-31',
+        state: 'activa',
+        scheduledPlanId: null,
+      };
+      service.findChangeContext = jest
+        .fn()
+        .mockResolvedValue({ subscription: live, current: {} });
+
+      await expect(service.cancelScheduledPlanChange(7)).rejects.toThrow(
+        'No tenés un cambio de plan programado.',
+      );
+    });
+
+    it('404s when the member has no live subscription at all', async () => {
+      service.findChangeContext = jest.fn().mockResolvedValue(null);
+
+      await expect(service.cancelScheduledPlanChange(7)).rejects.toThrow(
+        NotFoundException,
+      );
     });
   });
 });

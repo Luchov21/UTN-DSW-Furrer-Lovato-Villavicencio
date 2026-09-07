@@ -1,4 +1,13 @@
-import { Body, Controller, Get, HttpCode, Post, Query } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  Param,
+  ParseIntPipe,
+  Post,
+  Query,
+} from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { SkipThrottle } from '@nestjs/throttler';
 import { SKIP_ALL_THROTTLERS } from '../../auth/auth.throttle';
@@ -40,6 +49,18 @@ export class CheckoutController {
     @Query() query: PlanChangeQueryDto,
   ) {
     return this.checkoutService.getPlanChangeQuote(user.sub, query.planId);
+  }
+
+  // The front desk's counterpart to GET /plan-change. The member id comes from
+  // the route because the JWT here belongs to the admin, not to the member —
+  // the same shape POST /subscription/admin/:id already uses.
+  @Get('plan-change/member/:id')
+  @Auth(Role.ADMIN)
+  getPlanChangeQuoteForMember(
+    @Param('id', ParseIntPipe) id: number,
+    @Query() query: PlanChangeQueryDto,
+  ) {
+    return this.checkoutService.getPlanChangeQuote(id, query.planId);
   }
 
   // Self-service: charges the authenticated member. userId and email come

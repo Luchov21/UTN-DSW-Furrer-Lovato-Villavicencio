@@ -464,6 +464,16 @@ describe('CheckoutController authorization', () => {
       .set('Authorization', `Bearer ${tokenFor('member')}`)
       .expect((res) => expect(res.status).not.toBe(401));
   });
+
+  // The front desk's counterpart: a member cannot quote someone else's plan
+  // change through the admin route, even their own — it is admin-only.
+  it('restricts GET /plan-change/member/:id to an admin', async () => {
+    await adminOnly(
+      app,
+      'get',
+      `/api/v1/checkout/plan-change/member/${OWN_ID}?planId=1`,
+    );
+  });
 });
 
 describe('ContactController authorization', () => {

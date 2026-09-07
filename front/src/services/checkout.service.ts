@@ -104,6 +104,29 @@ export const getPlanChangeQuote = async (
   }
 };
 
+// The front desk's counterpart to getPlanChangeQuote: an admin quoting ANY
+// member's plan change by id, standing at the counter — see
+// GET /checkout/plan-change/member/:id (@Auth(Role.ADMIN)). Unlike the
+// self-service call above, the member never authenticates here; the admin's
+// own token is what's on the request.
+export const getPlanChangeQuoteForMember = async (
+  memberId: number,
+  planId: number,
+): Promise<PlanChangeQuote> => {
+  try {
+    const { data } = await api.get<PlanChangeQuote>(
+      `/checkout/plan-change/member/${memberId}`,
+      { params: { planId } },
+    );
+    return data;
+  } catch (error) {
+    throw new Error(
+      getApiErrorMessage(error, 'No se pudo calcular el cambio de plan.'),
+      { cause: error },
+    );
+  }
+};
+
 // Adapts a plan-change quote into the CheckoutSummary shape the checkout
 // pages' OrderSummary rail already knows how to render, so those pages don't
 // need a second summary component for one field. Every displayed number is

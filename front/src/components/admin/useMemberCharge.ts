@@ -5,6 +5,7 @@ import {
   getPaymentsByUser,
   registerPlanCheckout,
 } from '../../services/payment.service';
+import { getPlanChangeQuoteForMember } from '../../services/checkout.service';
 import {
   createChargeOrder,
   getChargeOrder,
@@ -14,9 +15,12 @@ import {
 import { formatPriceDisplay, parsePriceInput } from '../../lib/currency';
 import {
   CHARGE_METHODS,
+  amountForPlanChangeQuote,
+  defaultPlanIdFor,
   durationOptionsFor,
   findChargeFormError,
   isOrderMethod,
+  isPlanChangeCandidate,
   resolvedPriceFor,
   summarizeCharge,
   type ChargeMethod,
@@ -29,6 +33,7 @@ import {
   shouldKeepPolling,
 } from './charge-panel';
 import type { Plan, PlanDuration } from '../../types/plan';
+import type { PlanChangeQuote } from '../../types/plan-change';
 import type { Payment, PlanCheckoutPayload } from '../../types/payment';
 import type { User } from '../../types/user';
 
@@ -75,6 +80,19 @@ export const useMemberCharge = (
   const [isCreatingOrder, setIsCreatingOrder] = useState(false);
   const [orderError, setOrderError] = useState<string | null>(null);
 
+  // The member's TODAY plan (not the scheduled one) — set alongside the
+  // plan-picker default below, and read by the plan-change quote effect to
+  // decide whether the selected plan is actually a change worth quoting.
+  const [currentPlanId, setCurrentPlanId] = useState<number | null>(null);
+
+  // The same quote a member's own dashboard would see for this change,
+  // fetched through the admin route (GET /plan-change/member/:id) since the
+  // front desk is quoting someone else. Advisory only here — see
+  // MemberChargeForm's render of it and submit()'s complete indifference to
+  // it; self-service enforces the lock and the one-change rule, the counter
+  // decides.
+  const [quote, setQuote] = useState<PlanChangeQuote | null>(null);
+
   // Set the moment the admin picks a plan by hand. A ref, not state: the
   // subscription-default effect below reads it inside a .then() that must see
   // the LATEST value, not the one captured when the effect (re-)ran — without
@@ -117,7 +135,15 @@ export const useMemberCharge = (
       });
   }, []);
 
-  // Default to the member's current plan. A response that lands after the
+  // Default to the member's SCHEDULED plan when they have one pending
+  // (applyPlanChange's scheduledPlanId), else their current plan — see
+  // defaultPlanIdFor. Renewing a member with a pending downgrade at the
+  // counter must open on that plan, not the pricier one they're about to
+  // leave, or a manual front-desk renewal silently re-confirms the old plan
+  // and discards the change the member already asked for (Task 9's audit).
+  // currentPlanId itself is always recorded, independent of planTouchedRef —
+  // it feeds the plan-change quote effect below regardless of whether the
+  // admin has since picked a plan by hand. A response that lands after the
   // admin has moved to another member must not write anything — that race is
   // what used to leave the old form stuck on a spinner forever.
   useEffect(() => {
@@ -125,22 +151,63 @@ export const useMemberCharge = (
     let isCurrent = true;
     void getSubscriptionsByUser(selectedUser.id)
       .then((subs) => {
-        if (!isCurrent || planTouchedRef.current) return;
-        const active = subs.find(
-          (s) => s.state?.toLowerCase() === 'activa' && !s.deleted,
-        );
-        setPlanId(active?.planId ?? '');
+        if (!isCurrent) return;
+        const active =
+          subs.find((s) => s.state?.toLowerCase() === 'activa' && !s.deleted) ??
+          null;
+        setCurrentPlanId(active?.planId ?? null);
+        if (planTouchedRef.current) return;
+        setPlanId(defaultPlanIdFor(active));
         setMonths(1);
       })
       .catch((err: unknown) => {
-        if (!isCurrent || planTouchedRef.current) return;
+        if (!isCurrent) return;
         console.warn('Could not read the member current plan', err);
+        setCurrentPlanId(null);
+        if (planTouchedRef.current) return;
         setPlanId('');
       });
     return () => {
       isCurrent = false;
     };
   }, [selectedUser]);
+
+  // The front desk's counterpart to the member dashboard's own plan-change
+  // quote: fires only when the admin has actually picked a plan different
+  // from the member's current one (isPlanChangeCandidate) — a fresh sale to a
+  // member with no active subscription, or re-picking their own current
+  // plan, both read as "nothing to quote" and must not fetch. A response
+  // that lands after the admin moved on to another plan or member is
+  // dropped, same isCurrent guard as every other fetch in this hook.
+  useEffect(() => {
+    if (!selectedUser || !isPlanChangeCandidate(planId, currentPlanId)) {
+      // Resets synchronously — no request is in flight here to gate this on,
+      // same reasoning as the sibling early-returns elsewhere in this hook.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setQuote(null);
+      return;
+    }
+    let isCurrent = true;
+    const memberId = selectedUser.id;
+    const targetPlanId = planId;
+    void getPlanChangeQuoteForMember(memberId, targetPlanId)
+      .then((nextQuote) => {
+        if (!isCurrent) return;
+        setQuote(nextQuote);
+        // Pre-fill only. The admin can overwrite it, exactly as they already
+        // can with a plan's list price — a front-desk discount is a normal
+        // thing here.
+        setAmountText(formatPriceDisplay(amountForPlanChangeQuote(nextQuote)));
+      })
+      .catch((err: unknown) => {
+        if (!isCurrent) return;
+        console.warn('Could not quote this plan change', err);
+        setQuote(null);
+      });
+    return () => {
+      isCurrent = false;
+    };
+  }, [selectedUser, planId, currentPlanId]);
 
   // The advance-payment warning's data source: the backend has no flag for
   // "this membership was already auto-renewed today", so the panel infers it
@@ -363,7 +430,7 @@ export const useMemberCharge = (
 
   return {
     plans, plansError, planId, setPlanId: setPlanIdTouched, months, setMonths,
-    options, resolvedPrice, amountText, setAmountText, autoRenewedToday,
+    options, resolvedPrice, amountText, setAmountText, autoRenewedToday, quote,
     method, setMethod, orderView, isCreatingOrder, orderError,
     isSaving, formError, success, printWarning, submit, cancelOrder, resetOrder,
   };

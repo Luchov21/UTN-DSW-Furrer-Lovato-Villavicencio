@@ -51,7 +51,7 @@ const MemberChargeForm = ({
 }: MemberChargeFormProps) => {
   const {
     plans, plansError, planId, setPlanId, months, setMonths,
-    options, resolvedPrice, amountText, setAmountText, autoRenewedToday,
+    options, resolvedPrice, amountText, setAmountText, autoRenewedToday, quote,
     method, setMethod, orderView, isCreatingOrder, orderError,
     isSaving, formError, success, printWarning, submit, cancelOrder, resetOrder,
   } = useMemberCharge(selectedUser, onCharged);
@@ -168,6 +168,14 @@ const MemberChargeForm = ({
         {amountText && Number.isFinite(amount) && amount > 0 && (
           <p className="mt-1 text-xs text-primary">
             Se va a registrar como ${formatPriceDisplay(amount)}
+          </p>
+        )}
+        {/* Advisory only — self-service enforces the lock and the one-change
+            rule; an admin standing in front of the member decides, so the
+            charge button below stays enabled regardless of this note. */}
+        {quote && !quote.eligible && (
+          <p className="mt-1 text-sm text-text-muted">
+            Autoservicio lo rechazaría: {quote.message} Podés cobrarlo igual.
           </p>
         )}
       </div>

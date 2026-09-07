@@ -1,12 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import {
+  amountForPlanChangeQuote,
+  defaultPlanIdFor,
   durationOptionsFor,
   findChargeFormError,
   isOrderMethod,
+  isPlanChangeCandidate,
   resolvedPriceFor,
   summarizeCharge,
 } from './plan-charge';
 import type { Plan, PlanDuration } from '../../types/plan';
+import type { PlanChangeQuote } from '../../types/plan-change';
 
 const plan: Plan = { id: 2, name: 'Premium', price: 59, numDays: 30 };
 const sixMonths: PlanDuration = { id: 7, planId: 2, months: 6, numDays: 180, price: 300 };
@@ -99,5 +103,78 @@ describe('summarizeCharge', () => {
 
   it('pluralizes a longer term', () => {
     expect(summarizeCharge(plan, 3, 50000, 'point').termLabel).toBe('3 meses');
+  });
+});
+
+describe('defaultPlanIdFor', () => {
+  it('defaults to the scheduled plan when the member has one pending', () => {
+    expect(defaultPlanIdFor({ planId: 2, scheduledPlanId: 1 })).toBe(1);
+  });
+
+  it('falls back to the current plan when nothing is scheduled', () => {
+    expect(defaultPlanIdFor({ planId: 2, scheduledPlanId: null })).toBe(2);
+    expect(defaultPlanIdFor({ planId: 2 })).toBe(2);
+  });
+
+  it('is empty when the member has no active subscription at all', () => {
+    expect(defaultPlanIdFor(null)).toBe('');
+    expect(defaultPlanIdFor(undefined)).toBe('');
+  });
+});
+
+describe('isPlanChangeCandidate', () => {
+  it('is false when no plan is picked', () => {
+    expect(isPlanChangeCandidate('', 2)).toBe(false);
+  });
+
+  it('is false when the picked plan is the member current one', () => {
+    expect(isPlanChangeCandidate(2, 2)).toBe(false);
+  });
+
+  it('is false when the member has no current plan to compare against', () => {
+    expect(isPlanChangeCandidate(2, null)).toBe(false);
+  });
+
+  it('is true when a different plan than the current one is picked', () => {
+    expect(isPlanChangeCandidate(1, 2)).toBe(true);
+  });
+});
+
+describe('amountForPlanChangeQuote', () => {
+  const base: PlanChangeQuote = {
+    planId: 5,
+    planName: 'Plan Elite',
+    eligible: true,
+    reason: null,
+    message: null,
+    direction: 'upgrade',
+    amount: 15000,
+    daysRemaining: 12,
+    effectiveEndDate: '2026-10-01',
+  };
+
+  it('pre-fills the prorated amount for an eligible upgrade', () => {
+    expect(amountForPlanChangeQuote(base)).toBe(15000);
+  });
+
+  it('pre-fills zero for a downgrade — self-service never charges one', () => {
+    expect(amountForPlanChangeQuote({ ...base, direction: 'downgrade' })).toBe(0);
+  });
+
+  it('pre-fills zero for a lateral move', () => {
+    expect(amountForPlanChangeQuote({ ...base, direction: 'lateral' })).toBe(0);
+  });
+
+  it('pre-fills zero for an ineligible quote', () => {
+    expect(
+      amountForPlanChangeQuote({
+        ...base,
+        eligible: false,
+        direction: null,
+        reason: 'locked',
+        message: 'Podés cambiar de plan a partir del 01/10/2026.',
+        amount: 0,
+      }),
+    ).toBe(0);
   });
 });

@@ -24,6 +24,19 @@ export const weekdayShort = (weekday: number): string =>
 export const formatTimeOfDay = (startTime: string): string =>
   (startTime ?? '').slice(0, 5);
 
+// Minutes since midnight, for comparing a MySQL 'HH:MM:SS' against a clock
+// time without building a Date. NaN when the value is not a time, so a caller
+// can reject it rather than silently ordering it first.
+export const minutesOfDay = (time: string): number => {
+  const [hours, minutes] = (time ?? '').split(':');
+  const parsedHours = Number(hours);
+  const parsedMinutes = Number(minutes);
+  if (!Number.isFinite(parsedHours) || !Number.isFinite(parsedMinutes)) {
+    return NaN;
+  }
+  return parsedHours * 60 + parsedMinutes;
+};
+
 // "Lun, Mié y Vie" — the days a member with this class+hour attends.
 export const formatWeekdayList = (weekdays: number[]): string => {
   const sorted = [...new Set(weekdays)].sort((a, b) => a - b).map(weekdayShort);

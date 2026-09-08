@@ -57,7 +57,11 @@ const FacilityLightbox = ({
       const first = focusable[0];
       const last = focusable[focusable.length - 1];
 
-      if (event.shiftKey && document.activeElement === first) {
+      if (
+        event.shiftKey &&
+        (document.activeElement === first ||
+          document.activeElement === dialogRef.current)
+      ) {
         event.preventDefault();
         last.focus();
       } else if (!event.shiftKey && document.activeElement === last) {
@@ -112,7 +116,7 @@ const FacilityLightbox = ({
         type="button"
         onClick={() => onNavigate((index + 1) % photos.length)}
         aria-label="Foto siguiente"
-        className="absolute right-4 bottom-1/2 rounded-full border border-border bg-surface p-2 text-text transition-colors hover:text-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+        className="absolute right-4 rounded-full border border-border bg-surface p-2 text-text transition-colors hover:text-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
       >
         <ChevronRight className="h-5 w-5" />
       </button>

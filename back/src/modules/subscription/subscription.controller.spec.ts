@@ -14,6 +14,7 @@ const chargeableCard = {
   deleted: false,
   expirationMonth: 12,
   expirationYear: 2099,
+  paymentTypeId: 'credit_card',
 };
 
 const expiredCard = {
@@ -21,6 +22,7 @@ const expiredCard = {
   deleted: false,
   expirationMonth: 1,
   expirationYear: 2020,
+  paymentTypeId: 'credit_card',
 };
 
 describe('subscriptionController.setAutoRenew', () => {

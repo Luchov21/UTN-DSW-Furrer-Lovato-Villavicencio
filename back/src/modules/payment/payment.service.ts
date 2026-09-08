@@ -97,6 +97,14 @@ export class PaymentService {
     amount: number;
     payMethod: string;
     registeredById?: number | null;
+    mpOrderId?: string | null;
+    // Set only by a prorated plan-change checkout (front-desk or online):
+    // the id of the subscription being replaced, and the end date the new
+    // one must inherit instead of opening a fresh term. See
+    // subscriptionService.replaceActiveSubscription's own comment on the
+    // same two fields.
+    changeFromSubscriptionId?: number | null;
+    endDateOverride?: Date | null;
   }): Promise<{ payment: Payment; subscription: Subscription }> {
     // Idempotency first: Mercado Pago retries a notification up to eight
     // times over four days, and a retry must not sell the plan twice.
@@ -111,7 +119,18 @@ export class PaymentService {
     }
 
     const durations = await this.planDurationService.findByPlan(input.planId);
-    const term = resolveTerm(plan, input.months, durations);
+    const isPlanChange = input.changeFromSubscriptionId != null;
+
+    // A prorated change buys no term, so resolveTerm has nothing to resolve
+    // — no PlanDuration has 0 months, and none should.
+    const term = isPlanChange
+      ? {
+          months: 0,
+          numDays: plan.numDays,
+          price: Number(plan.price),
+          planDurationId: null,
+        }
+      : resolveTerm(plan, input.months, durations);
 
     const { payment, subscription } = await this.dataSource.transaction(
       async (manager) => {
@@ -120,7 +139,19 @@ export class PaymentService {
             userId: input.userId,
             planId: input.planId,
             term,
-            soldPrice: input.amount,
+            // Per the spec's R6: on a prorated row soldPrice is the new
+            // plan's regular monthly price — the member's ongoing value —
+            // not the difference collected, which lives on the Payment row
+            // (`amount` below). Recording the discounted amount here would
+            // report this member's MRR contribution at the one-time
+            // proration instead of what they actually pay from here on.
+            soldPrice: isPlanChange ? Number(plan.price) : input.amount,
+            ...(isPlanChange
+              ? {
+                  endDate: input.endDateOverride!,
+                  changedFromSubscriptionId: input.changeFromSubscriptionId!,
+                }
+              : {}),
           });
 
         const payment = manager.create(Payment, {
@@ -131,6 +162,9 @@ export class PaymentService {
           date: new Date(),
           state: PaymentState.COMPLETED,
           registeredById: input.registeredById ?? null,
+          mpOrderId: input.mpOrderId ?? null,
+          // 0 on a plan change: a prorated adjustment is not a purchase of N
+          // months, and 1 would overstate it the moment anything reads this.
           termMonths: term.months,
           // Same convention as createFromMercadoPago: the plan's monthly list
           // price, not the discounted amount.
@@ -175,8 +209,14 @@ export class PaymentService {
 
     // Done before the payment row is written so a failure here leaves no
     // payment standing against a subscription that wasn't actually promoted
-    // or extended.
-    await this.promoteOrExtendSubscription(subscription, termMonths);
+    // or extended. Returns the price of the plan the term actually opened
+    // on — subscription.plan.price would be stale on a renew onto a
+    // scheduled plan, since renew() flips the plan on a separate, freshly
+    // fetched instance this local `subscription` never sees.
+    const monthlyPriceAtPurchase = await this.promoteOrExtendSubscription(
+      subscription,
+      termMonths,
+    );
 
     const newPayment = this.paymentRepository.create({
       subscriptionId: dto.subscriptionId,
@@ -186,7 +226,7 @@ export class PaymentService {
       state: PaymentState.COMPLETED,
       registeredById: adminId,
       termMonths,
-      monthlyPriceAtPurchase: subscription.plan.price,
+      monthlyPriceAtPurchase,
       deleted: false,
     });
     return this.paymentRepository.save(newPayment);
@@ -213,7 +253,13 @@ export class PaymentService {
       );
     }
 
-    await this.promoteOrExtendSubscription(subscription, dto.termMonths);
+    // Returns the price of the plan the term actually opened on — see the
+    // comment on promoteOrExtendSubscription and its use in
+    // createManualPayment above.
+    const monthlyPriceAtPurchase = await this.promoteOrExtendSubscription(
+      subscription,
+      dto.termMonths,
+    );
 
     const newPayment = this.paymentRepository.create({
       subscriptionId: dto.subscriptionId,
@@ -223,8 +269,9 @@ export class PaymentService {
       date: new Date(),
       state: PaymentState.COMPLETED,
       registeredById: dto.registeredById ?? null,
+      mpOrderId: dto.mpOrderId ?? null,
       termMonths: dto.termMonths,
-      monthlyPriceAtPurchase: subscription.plan.price,
+      monthlyPriceAtPurchase,
       deleted: false,
     });
 
@@ -325,10 +372,21 @@ export class PaymentService {
   //
   // `state` is a plain string column, so each enum member is widened to its
   // value before comparing.
+  // Returns the monthly price the caller should record as
+  // monthlyPriceAtPurchase for the payment row it is about to write. This
+  // must be the SAME plan the term is actually opening on: for the renew
+  // branch that is the scheduled plan (nextPlan) when one applies, not
+  // subscription.plan — renew() flips the plan on a separate, freshly
+  // fetched Subscription instance inside subscription.service.ts, so this
+  // method's own `subscription` parameter never reflects that flip, and a
+  // caller reading subscription.plan.price after awaiting this would record
+  // the OLD plan's price on a row whose `amount` already reflects the new
+  // one. The activate branches never carry a scheduled change, so they keep
+  // returning subscription.plan.price exactly as before.
   private async promoteOrExtendSubscription(
     subscription: Subscription,
     termMonths: number,
-  ) {
+  ): Promise<number> {
     const pendingState: string = SubscriptionState.PENDING;
     const activeState: string = SubscriptionState.ACTIVE;
     const inactiveState: string = SubscriptionState.INACTIVE;
@@ -343,6 +401,7 @@ export class PaymentService {
         subscription.id,
         termMonths * subscription.plan.numDays,
       );
+      return Number(subscription.plan.price);
     } else if (subscription.state === activeState) {
       // assignPlanToMember (byAdmin=true) opens a subscription ACTIVE with the
       // correct period already set, but with zero payments recorded — the first
@@ -358,15 +417,29 @@ export class PaymentService {
       // prior ACTIVE row at assignment time, so there is none left to find.
       const currentPayment = await this.findCurrentTermPayment(subscription.id);
       if (currentPayment) {
+        // renew() may switch this subscription to a scheduled plan; the
+        // period length has to come from the plan the term will actually be
+        // on, and so does the price recorded as monthlyPriceAtPurchase — the
+        // same effectivePlan RenewalService.chargeOne resolves independently
+        // for the amount it charges. The two must never disagree.
+        const nextPlan =
+          subscription.scheduledPlanId != null
+            ? ((await this.planService.findPlan(
+                subscription.scheduledPlanId,
+              )) ?? subscription.plan)
+            : subscription.plan;
+
         await this.subscriptionService.renew(
           subscription.id,
-          termMonths * subscription.plan.numDays,
+          termMonths * nextPlan.numDays,
         );
+        return Number(nextPlan.price);
       } else {
         await this.subscriptionService.activate(
           subscription.id,
           termMonths * subscription.plan.numDays,
         );
+        return Number(subscription.plan.price);
       }
     } else if (subscription.state === pausedState) {
       throw new ConflictException(
@@ -375,6 +448,13 @@ export class PaymentService {
     } else if (subscription.state === cancelledState) {
       throw new ConflictException('Esta suscripción está cancelada.');
     }
+
+    // Unreachable given SubscriptionState's five members — every real value
+    // is handled and returns/throws above. Kept only so this method stays a
+    // total function of type Promise<number> without inventing behavior for
+    // a state that should never occur, exactly as the pre-fix version did
+    // nothing observable in that same impossible case.
+    return Number(subscription.plan.price);
   }
 
   // Looked up first by createFromMercadoPago as the idempotency guarantee: a

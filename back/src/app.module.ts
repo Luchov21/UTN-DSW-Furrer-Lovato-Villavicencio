@@ -20,6 +20,7 @@ import { RefundModule } from './modules/refund/refund.module';
 import { MercadoPagoWebhookModule } from './modules/mercadopago/mercadopago-webhook.module';
 import { ContactModule } from './modules/contact/contact.module';
 import { AnalyticsModule } from './modules/analytics/analytics.module';
+import { CheckoutModule } from './modules/checkout/checkout.module';
 import { AuthModule } from './auth/auth.module';
 import { REGISTERED_THROTTLERS } from './auth/auth.throttle';
 import { SecurityLogInterceptor } from './common/interceptors/security-log.interceptor';
@@ -51,6 +52,7 @@ import { SecurityLogFilter } from './common/filters/security-log.filter';
     classRegistrationModule,
     ContactModule,
     AnalyticsModule,
+    CheckoutModule,
     AuthModule,
   ],
   controllers: [],

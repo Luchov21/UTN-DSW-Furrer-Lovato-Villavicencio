@@ -1,4 +1,5 @@
 import type { Subscription } from '../types/subscription';
+import type { PlanChangeResult } from '../types/plan-change';
 import { AxiosError } from 'axios';
 import api from './api';
 
@@ -33,19 +34,6 @@ export const getMySubscription = async (): Promise<Subscription | null> => {
   }
 };
 
-export const changePlan = async (planId: number): Promise<Subscription> => {
-  try {
-    const { data } = await api.post<Subscription>('/subscription/change-plan', {
-      planId,
-    });
-    return data;
-  } catch (error: unknown) {
-    throw new Error(getErrorMessage(error, 'No se pudo cambiar de plan.'), {
-      cause: error,
-    });
-  }
-};
-
 // Self-service: turning it off always succeeds; turning it on without an
 // active, chargeable saved card 409s (see subscription.controller.ts).
 export const setAutoRenew = async (
@@ -65,9 +53,46 @@ export const setAutoRenew = async (
   }
 };
 
-// Admin-side counterpart of changePlan: closes the member's active
-// subscription, if any, and opens one on the chosen plan. The id travels in
-// the path because the JWT here belongs to the admin, not to the member.
+// Self-service: applies a free plan change (lateral immediately, downgrade at
+// renewal). An upgrade 409s here on purpose — it has a cost, and must go
+// through POST /checkout in plan-change mode instead of this route.
+export const applyPlanChange = async (
+  planId: number,
+): Promise<PlanChangeResult> => {
+  try {
+    const { data } = await api.put<PlanChangeResult>(
+      '/subscription/me/plan-change',
+      { planId },
+    );
+    return data;
+  } catch (error: unknown) {
+    throw new Error(
+      getErrorMessage(error, 'No se pudo cambiar de plan.'),
+      { cause: error },
+    );
+  }
+};
+
+// Self-service: clears a scheduled downgrade set by applyPlanChange. The live
+// term itself is untouched — this only cancels what would have happened at
+// renewal.
+export const cancelScheduledPlanChange = async (): Promise<Subscription> => {
+  try {
+    const { data } = await api.delete<Subscription>(
+      '/subscription/me/plan-change',
+    );
+    return data;
+  } catch (error: unknown) {
+    throw new Error(
+      getErrorMessage(error, 'No se pudo cancelar el cambio de plan programado.'),
+      { cause: error },
+    );
+  }
+};
+
+// Admin path: closes the member's active subscription, if any, and opens one
+// on the chosen plan. The id travels in the path because the JWT here belongs
+// to the admin, not to the member.
 export const assignPlanToMember = async (
   userId: number,
   planId: number,

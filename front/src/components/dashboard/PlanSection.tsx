@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Loader2, AlertCircle } from 'lucide-react';
 import Card from '../common/Card';
 import Button from '../common/Button';
@@ -7,11 +8,16 @@ import PlanCard from '../plans/PlanCard';
 import { enrichBackendPlan, type MembershipPlan } from '../plans/plans.data';
 import { getPlans } from '../../services/plan.service';
 import {
+  applyPlanChange,
+  cancelScheduledPlanChange,
   getMySubscription,
-  changePlan,
 } from '../../services/subscription.service';
 import type { Subscription } from '../../types/subscription';
 import { formatDateOnly } from '../../lib/date';
+import { usePlanChangeQuotes } from './usePlanChangeQuotes';
+import { resolvePlanChangeAction } from './plan-change-action';
+import ScheduledPlanBanner from './ScheduledPlanBanner';
+import PlanChangeConfirmDialog from './PlanChangeConfirmDialog';
 
 const stateBadge: Record<string, string> = {
   activa: 'bg-primary/10 text-primary border-primary/30',
@@ -21,15 +27,18 @@ const stateBadge: Record<string, string> = {
 };
 
 const PlanSection = () => {
+  const navigate = useNavigate();
   const [plans, setPlans] = useState<MembershipPlan[]>([]);
   const [subscription, setSubscription] = useState<Subscription | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
 
   const [pendingPlan, setPendingPlan] = useState<MembershipPlan | null>(null);
-  const [isChanging, setIsChanging] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionSuccess, setActionSuccess] = useState<string | null>(null);
+  const [isCancellingSchedule, setIsCancellingSchedule] = useState(false);
+
+  const { quotes } = usePlanChangeQuotes(plans, !!subscription);
 
   // Every setState lives in an async callback, so the effect below only starts
   // the requests instead of updating state while React renders.
@@ -78,21 +87,50 @@ const PlanSection = () => {
 
   const confirmChange = async () => {
     if (!pendingPlan?.id) return;
-    setIsChanging(true);
-    setActionError(null);
+
+    const action = resolvePlanChangeAction(
+      pendingPlan.id,
+      !!subscription,
+      quotes[pendingPlan.id],
+    );
+
+    if (action.type === 'checkout') {
+      navigate(action.url);
+      return;
+    }
+
     try {
-      const updated = await changePlan(pendingPlan.id);
-      setSubscription(updated);
+      const result = await applyPlanChange(pendingPlan.id);
       setActionSuccess(
-        `Tu cambio de plan a "${pendingPlan.name}" quedó pendiente. Acercate al gimnasio para abonarlo: el plan se activa cuando registremos tu pago, y mientras tanto seguís con tu plan actual.`,
+        result.direction === 'lateral'
+          ? `Ya estás en ${pendingPlan.name}.`
+          : `Vas a pasar a ${pendingPlan.name} el ${formatDateOnly(result.effectiveFrom)}.`,
       );
       setPendingPlan(null);
+      reload();
     } catch (err) {
       setActionError(
-        err instanceof Error ? err.message : 'No se pudo cambiar de plan.',
+        err instanceof Error ? err.message : 'No se pudo cambiar el plan.',
+      );
+    }
+  };
+
+  const handleCancelScheduled = async () => {
+    setActionError(null);
+    setActionSuccess(null);
+    setIsCancellingSchedule(true);
+    try {
+      await cancelScheduledPlanChange();
+      setActionSuccess('Cancelaste el cambio de plan programado.');
+      reload();
+    } catch (err) {
+      setActionError(
+        err instanceof Error
+          ? err.message
+          : 'No se pudo cancelar el cambio de plan programado.',
       );
     } finally {
-      setIsChanging(false);
+      setIsCancellingSchedule(false);
     }
   };
 
@@ -119,6 +157,10 @@ const PlanSection = () => {
 
   const currentPlanId = subscription?.planId;
   const currentState = (subscription?.state ?? '').toLowerCase();
+  const scheduledPlan = plans.find(
+    (p) => p.id === subscription?.scheduledPlanId,
+  );
+  const pendingQuote = pendingPlan?.id ? quotes[pendingPlan.id] : undefined;
 
   return (
     <div className="space-y-8">
@@ -147,7 +189,16 @@ const PlanSection = () => {
               {subscription.state ?? 'Sin estado'}
             </span>
           </div>
-        ) : (
+        ) : null}
+        {scheduledPlan && subscription && (
+          <ScheduledPlanBanner
+            planName={scheduledPlan.name}
+            endDate={subscription.endDate}
+            onCancel={handleCancelScheduled}
+            isCancelling={isCancellingSchedule}
+          />
+        )}
+        {!subscription && (
           <p className="mt-3 text-sm text-text-muted">
             Todavía no tenés un plan activo. Elegí uno abajo para empezar.
           </p>
@@ -177,6 +228,7 @@ const PlanSection = () => {
                   plan.id === currentPlanId &&
                   currentState === 'activa'
                 }
+                quote={plan.id ? quotes[plan.id] : undefined}
               />
             ))}
           </div>
@@ -184,48 +236,13 @@ const PlanSection = () => {
       </div>
 
       {pendingPlan && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
-        >
-          <Card className="w-full max-w-md hover:translate-y-0 hover:shadow-lg">
-            <h4 className="font-display text-lg font-semibold text-text">
-              Confirmar cambio de plan
-            </h4>
-            <p className="mt-3 text-sm text-text-muted">
-              Vas a pasar{' '}
-              {subscription
-                ? `de "${subscription.plan?.name ?? 'tu plan actual'}" `
-                : ''}
-              a{' '}
-              <span className="font-semibold text-text">
-                "{pendingPlan.name}"
-              </span>{' '}
-              ({pendingPlan.price}
-              {pendingPlan.period}). El cambio queda registrado como pendiente:
-              el plan se activa cuando abones en el gimnasio y registremos tu
-              pago, y mientras tanto seguís con tu plan actual.
-            </p>
-
-            <div className="mt-6 flex gap-3">
-              <Button
-                onClick={confirmChange}
-                disabled={isChanging}
-                className="flex-1"
-              >
-                {isChanging ? 'Confirmando...' : 'Confirmar'}
-              </Button>
-              <Button
-                variant="secondary"
-                onClick={() => setPendingPlan(null)}
-                disabled={isChanging}
-              >
-                Cancelar
-              </Button>
-            </div>
-          </Card>
-        </div>
+        <PlanChangeConfirmDialog
+          pendingPlan={pendingPlan}
+          subscription={subscription}
+          quote={pendingQuote}
+          onConfirm={confirmChange}
+          onCancel={() => setPendingPlan(null)}
+        />
       )}
     </div>
   );

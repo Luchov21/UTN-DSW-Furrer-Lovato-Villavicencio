@@ -5,6 +5,7 @@ import {
   getPaymentsByUser,
   registerPlanCheckout,
 } from '../../services/payment.service';
+import { getPlanChangeQuoteForMember } from '../../services/checkout.service';
 import {
   createChargeOrder,
   getChargeOrder,
@@ -14,9 +15,12 @@ import {
 import { formatPriceDisplay, parsePriceInput } from '../../lib/currency';
 import {
   CHARGE_METHODS,
+  amountForPlanChangeQuote,
+  defaultPlanIdFor,
   durationOptionsFor,
   findChargeFormError,
   isOrderMethod,
+  isPlanChangeCandidate,
   resolvedPriceFor,
   summarizeCharge,
   type ChargeMethod,
@@ -29,6 +33,7 @@ import {
   shouldKeepPolling,
 } from './charge-panel';
 import type { Plan, PlanDuration } from '../../types/plan';
+import type { PlanChangeQuote } from '../../types/plan-change';
 import type { Payment, PlanCheckoutPayload } from '../../types/payment';
 import type { User } from '../../types/user';
 
@@ -69,10 +74,24 @@ export const useMemberCharge = (
   const [isSaving, setIsSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [printWarning, setPrintWarning] = useState<string | null>(null);
 
   const [orderView, setOrderView] = useState<OrderView | null>(null);
   const [isCreatingOrder, setIsCreatingOrder] = useState(false);
   const [orderError, setOrderError] = useState<string | null>(null);
+
+  // The member's TODAY plan (not the scheduled one) — set alongside the
+  // plan-picker default below, and read by the plan-change quote effect to
+  // decide whether the selected plan is actually a change worth quoting.
+  const [currentPlanId, setCurrentPlanId] = useState<number | null>(null);
+
+  // The same quote a member's own dashboard would see for this change,
+  // fetched through the admin route (GET /plan-change/member/:id) since the
+  // front desk is quoting someone else. Advisory only here — see
+  // MemberChargeForm's render of it and submit()'s complete indifference to
+  // it; self-service enforces the lock and the one-change rule, the counter
+  // decides.
+  const [quote, setQuote] = useState<PlanChangeQuote | null>(null);
 
   // Set the moment the admin picks a plan by hand. A ref, not state: the
   // subscription-default effect below reads it inside a .then() that must see
@@ -116,7 +135,15 @@ export const useMemberCharge = (
       });
   }, []);
 
-  // Default to the member's current plan. A response that lands after the
+  // Default to the member's SCHEDULED plan when they have one pending
+  // (applyPlanChange's scheduledPlanId), else their current plan — see
+  // defaultPlanIdFor. Renewing a member with a pending downgrade at the
+  // counter must open on that plan, not the pricier one they're about to
+  // leave, or a manual front-desk renewal silently re-confirms the old plan
+  // and discards the change the member already asked for (Task 9's audit).
+  // currentPlanId itself is always recorded, independent of planTouchedRef —
+  // it feeds the plan-change quote effect below regardless of whether the
+  // admin has since picked a plan by hand. A response that lands after the
   // admin has moved to another member must not write anything — that race is
   // what used to leave the old form stuck on a spinner forever.
   useEffect(() => {
@@ -124,22 +151,83 @@ export const useMemberCharge = (
     let isCurrent = true;
     void getSubscriptionsByUser(selectedUser.id)
       .then((subs) => {
-        if (!isCurrent || planTouchedRef.current) return;
-        const active = subs.find(
-          (s) => s.state?.toLowerCase() === 'activa' && !s.deleted,
-        );
-        setPlanId(active?.planId ?? '');
+        if (!isCurrent) return;
+        const active =
+          subs.find((s) => s.state?.toLowerCase() === 'activa' && !s.deleted) ??
+          null;
+        setCurrentPlanId(active?.planId ?? null);
+        if (planTouchedRef.current) return;
+        setPlanId(defaultPlanIdFor(active));
         setMonths(1);
       })
       .catch((err: unknown) => {
-        if (!isCurrent || planTouchedRef.current) return;
+        if (!isCurrent) return;
         console.warn('Could not read the member current plan', err);
+        setCurrentPlanId(null);
+        if (planTouchedRef.current) return;
         setPlanId('');
       });
     return () => {
       isCurrent = false;
     };
   }, [selectedUser]);
+
+  // The front desk's counterpart to the member dashboard's own plan-change
+  // quote: fires only when the admin has actually picked a plan different
+  // from the member's current one (isPlanChangeCandidate) — a fresh sale to a
+  // member with no active subscription, or re-picking their own current
+  // plan, both read as "nothing to quote" and must not fetch. A response
+  // that lands after the admin moved on to another plan or member is
+  // dropped, same isCurrent guard as every other fetch in this hook.
+  useEffect(() => {
+    if (!selectedUser || !isPlanChangeCandidate(planId, currentPlanId)) {
+      // Resets synchronously — no request is in flight here to gate this on,
+      // same reasoning as the sibling early-returns elsewhere in this hook.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setQuote(null);
+      return;
+    }
+    let isCurrent = true;
+    const memberId = selectedUser.id;
+    const targetPlanId = planId;
+    void getPlanChangeQuoteForMember(memberId, targetPlanId)
+      .then((nextQuote) => {
+        if (!isCurrent) return;
+        setQuote(nextQuote);
+        // Pre-fill only when the admin actually picked this plan by hand.
+        // An auto-selected plan (planTouchedRef still false — defaultPlanIdFor
+        // opened the picker on the member's scheduledPlanId or their own
+        // current plan) is, by construction, never an upgrade: applyPlanChange
+        // only ever sets scheduledPlanId for a downgrade, an upgrade goes
+        // through checkout instead. assessChange returns amount: 0 for every
+        // downgrade, and often eligible: false too (too_close_to_end) for a
+        // member walking in at/after their term's end — the routine renewal
+        // this whole feature exists to help with. Overwriting amountText here
+        // would clobber the synchronous resolvedPrice effect's already-correct
+        // list-price value with 0, forcing the admin to retype the price on
+        // every ordinary renewal (round 1 review finding). A manually-picked
+        // plan change is unaffected: it still pre-fills exactly as shipped —
+        // except an eligible upgrade, whose prorated amount amountForPlanChangeQuote
+        // deliberately refuses to hand back (see that function's comment: the
+        // write path this form submits to has no proration support, so
+        // pre-filling it would let an admin under-charge and grant a free
+        // extra term). null there means "leave amountText alone".
+        if (planTouchedRef.current) {
+          const prefillAmount = amountForPlanChangeQuote(nextQuote);
+          if (prefillAmount !== null) {
+            setAmountText(formatPriceDisplay(prefillAmount));
+          }
+        }
+      })
+      .catch((err: unknown) => {
+        if (!isCurrent) return;
+        console.warn('Could not quote this plan change', err);
+        setQuote(null);
+      });
+    return () => {
+      isCurrent = false;
+    };
+  }, [selectedUser, planId, currentPlanId]);
 
   // The advance-payment warning's data source: the backend has no flag for
   // "this membership was already auto-renewed today", so the panel infers it
@@ -289,6 +377,7 @@ export const useMemberCharge = (
   const submit = async (userId: number): Promise<void> => {
     setFormError(null);
     setSuccess(null);
+    setPrintWarning(null);
 
     const validationError = findChargeFormError({ planId, months, amountText });
     if (validationError) {
@@ -333,7 +422,7 @@ export const useMemberCharge = (
 
     setIsSaving(true);
     try {
-      await registerPlanCheckout({
+      const payment = await registerPlanCheckout({
         userId,
         planId: Number(planId),
         months,
@@ -344,6 +433,11 @@ export const useMemberCharge = (
       setSuccess(
         `Cobro de $${formatPriceDisplay(amount)} registrado — ${plan?.name ?? 'plan'}, ${summary.termLabel}.`,
       );
+      if (payment.printStatus === 'error') {
+        setPrintWarning(
+          'El cobro se registró, pero no se pudo imprimir el comprobante en la terminal.',
+        );
+      }
       await onCharged?.(summary);
     } catch (err) {
       setFormError(
@@ -356,8 +450,8 @@ export const useMemberCharge = (
 
   return {
     plans, plansError, planId, setPlanId: setPlanIdTouched, months, setMonths,
-    options, resolvedPrice, amountText, setAmountText, autoRenewedToday,
+    options, resolvedPrice, amountText, setAmountText, autoRenewedToday, quote,
     method, setMethod, orderView, isCreatingOrder, orderError,
-    isSaving, formError, success, submit, cancelOrder, resetOrder,
+    isSaving, formError, success, printWarning, submit, cancelOrder, resetOrder,
   };
 };

@@ -1,5 +1,9 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { MercadoPagoClient, MpPaymentResult } from './mercadopago.client';
+import {
+  MercadoPagoClient,
+  MpPaymentResult,
+  mapOrderStatusToPaymentStatus,
+} from './mercadopago.client';
 import { PaymentService } from '../payment/payment.service';
 import { Payment } from '../payment/entity/payment.entity';
 import { Subscription } from '../subscription/entity/subscription.entity';
@@ -26,6 +30,13 @@ export interface ResolvedOrder {
   // Optional/nullable so a future resolver with no notion of "who" (there
   // isn't one today) doesn't have to fabricate a value.
   registeredById?: number | null;
+  // Set only when the order behind this notification was a prorated plan
+  // change (ChargeOrder.changeFromSubscriptionId): the id of the
+  // subscription being replaced, and the end date the new one must inherit.
+  // Passed straight through to PaymentService.confirmPlanCharge, which is
+  // what actually branches on them. Undefined for every ordinary term order.
+  changeFromSubscriptionId?: number | null;
+  endDateOverride?: Date | null;
 }
 
 /**
@@ -103,10 +114,11 @@ export class WebhookService {
       }
       return {
         id: order.paymentId,
-        status: order.status === 'processed' ? 'approved' : order.status,
+        status: mapOrderStatusToPaymentStatus(order.status),
         statusDetail: order.statusDetail,
         transactionAmount: order.totalPaidAmount,
         externalReference: order.externalReference,
+        mpOrderId: order.id,
       };
     }
     if (type === 'payment') {
@@ -212,6 +224,9 @@ export class WebhookService {
         amount: resolved.amount,
         payMethod: resolved.payMethod,
         registeredById: resolved.registeredById ?? null,
+        mpOrderId: payment.mpOrderId,
+        changeFromSubscriptionId: resolved.changeFromSubscriptionId ?? null,
+        endDateOverride: resolved.endDateOverride ?? null,
       });
     } catch (err) {
       // Rethrown, not swallowed: Mercado Pago has already taken the money, so
@@ -237,7 +252,11 @@ export class WebhookService {
       name: subscription.user.name,
       planName: subscription.plan.name,
       amount: resolved.amount,
-      termMonths: resolved.termMonths,
+      // Same convention as CheckoutService.settle: resolved.termMonths is 0
+      // for a prorated plan change settled asynchronously (Point/QR/wallet)
+      // through this webhook — null tells the template to render "Ajuste de
+      // plan" instead of "0 meses".
+      termMonths: resolved.termMonths === 0 ? null : resolved.termMonths,
       method: resolved.payMethod,
       newEndDate: subscription.endDate,
     });

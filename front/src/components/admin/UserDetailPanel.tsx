@@ -135,6 +135,10 @@ const UserDetailPanel = ({
       setDniError('El DNI tiene que ser un número entero.');
       return;
     }
+    if (trimmedDni && (trimmedDni.length < 7 || trimmedDni.length > 8)) {
+      setDniError('El DNI tiene que tener 7 u 8 dígitos.');
+      return;
+    }
 
     setIsSaving(true);
     try {

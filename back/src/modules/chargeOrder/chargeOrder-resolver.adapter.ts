@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { ChargeOrderService } from './chargeOrder.service';
+import { ChargeOrderMethod } from './enum/chargeOrder-method.enum';
 import { ChargeOrderStatus } from './enum/chargeOrder-status.enum';
 import type {
   OrderResolver,
@@ -36,13 +37,39 @@ export class ChargeOrderResolverAdapter implements OrderResolver {
       return null;
     }
 
+    // An online checkout can be recorded by either path — CheckoutService
+    // synchronously, or here when the webhook completes an order that path
+    // could not finish — and the same purchase must not get two different
+    // labels in the dashboard's "Método" column depending on which one won.
+    // CheckoutService writes 'mercadopago' (as the renewal cron does), so
+    // that is the label. 'point' and 'qr' stay as they are: those are only
+    // ever recorded here, and the distinction between the terminal and the
+    // caja is real front-desk information the analytics breakdown reports on.
+    const onlineMethod: string = ChargeOrderMethod.ONLINE;
+    const payMethod =
+      chargeOrder.method === onlineMethod ? 'mercadopago' : chargeOrder.method;
+
+    // Undefined (not null) when this isn't a plan change, so it drops out of
+    // a `toEqual` comparison exactly like every other optional ResolvedOrder
+    // field the existing tests assert on — see PaymentService.confirmPlanCharge's
+    // own isPlanChange check, which reads `!= null` either way.
+    const changeFromSubscriptionId =
+      chargeOrder.changeFromSubscriptionId ?? undefined;
+    const endDateOverride = changeFromSubscriptionId
+      ? await this.chargeOrderService.findSubscriptionEndDate(
+          changeFromSubscriptionId,
+        )
+      : undefined;
+
     return {
       userId: chargeOrder.userId,
       planId: chargeOrder.planId,
       termMonths: chargeOrder.termMonths,
       amount: chargeOrder.amount,
-      payMethod: chargeOrder.method,
+      payMethod,
       registeredById: chargeOrder.createdById,
+      changeFromSubscriptionId,
+      endDateOverride,
     };
   }
 

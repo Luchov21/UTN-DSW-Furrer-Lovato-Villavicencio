@@ -45,6 +45,7 @@ const RegisterPaymentForm = ({
   const [isSaving, setIsSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [printWarning, setPrintWarning] = useState<string | null>(null);
 
   useEffect(() => {
     if (!selectedUser) return;
@@ -90,6 +91,7 @@ const RegisterPaymentForm = ({
   const handleSubmit = async () => {
     setFormError(null);
     setSuccess(null);
+    setPrintWarning(null);
 
     if (!selectedSubId) {
       setFormError('Elegí una suscripción.');
@@ -123,6 +125,11 @@ const RegisterPaymentForm = ({
       setSuccess(
         `Pago de $${formatPriceDisplay(amountNum)} registrado correctamente.`,
       );
+      if (payment.printStatus === 'error') {
+        setPrintWarning(
+          'El pago se registró, pero no se pudo imprimir el comprobante en la terminal.',
+        );
+      }
       setAmount('');
       setTermMonths('1');
       onRegistered?.(payment);
@@ -241,6 +248,7 @@ const RegisterPaymentForm = ({
 
               <FormAlert type="error" message={formError} />
               <FormAlert type="success" message={success} />
+              <FormAlert type="warning" message={printWarning} />
 
               <Button
                 onClick={handleSubmit}

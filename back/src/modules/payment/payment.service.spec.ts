@@ -320,6 +320,131 @@ describe('createManualPayment — advance payment', () => {
   });
 });
 
+describe('createManualPayment — advance payment onto a scheduled plan', () => {
+  let service: PaymentService;
+  let repository: {
+    create: jest.Mock;
+    save: jest.Mock;
+    find: jest.Mock;
+    findOne: jest.Mock;
+  };
+  let subscriptions: {
+    findSubscription: jest.Mock;
+    activate: jest.Mock;
+    renew: jest.Mock;
+  };
+  let plans: { findPlan: jest.Mock };
+
+  const dto = { subscriptionId: 7, amount: 15000, payMethod: 'efectivo' };
+
+  // findOne backs findCurrentTermPayment: a completed row means the ACTIVE
+  // branch treats this as a genuine advance payment (renew), same as the
+  // 'advance payment' block above.
+  const buildService = async () => {
+    repository = {
+      create: jest.fn((entity: object) => entity),
+      save: jest.fn((entity: object) => Promise.resolve({ id: 1, ...entity })),
+      find: jest.fn().mockResolvedValue([]),
+      findOne: jest.fn().mockResolvedValue({ id: 42 }),
+    };
+    plans = {
+      findPlan: jest
+        .fn()
+        .mockResolvedValue({ id: 1, price: 6000, numDays: 45, name: 'Basic' }),
+    };
+
+    const moduleRef = await Test.createTestingModule({
+      providers: [
+        PaymentService,
+        { provide: getRepositoryToken(Payment), useValue: repository },
+        { provide: getDataSourceToken(), useValue: {} },
+        { provide: subscriptionService, useValue: subscriptions },
+        { provide: PlanService, useValue: plans },
+        { provide: PlanDurationService, useValue: {} },
+        {
+          provide: UserService,
+          useValue: { findUser: jest.fn().mockResolvedValue(null) },
+        },
+      ],
+    }).compile();
+
+    service = moduleRef.get(PaymentService);
+  };
+
+  // renew() itself applies the scheduled plan flip, but the DAY COUNT for the
+  // new term has to be computed from the plan the term will actually be on —
+  // otherwise a downgrade to a plan with a different numDays would extend the
+  // subscription by the wrong number of days on this very payment.
+  it("looks ahead to the scheduled plan's numDays, not the current plan's", async () => {
+    subscriptions = {
+      findSubscription: jest.fn().mockResolvedValue({
+        id: 7,
+        state: SubscriptionState.ACTIVE,
+        deleted: false,
+        scheduledPlanId: 1,
+        plan: { id: 2, numDays: 30, price: 15000 },
+      }),
+      activate: jest.fn().mockResolvedValue(undefined),
+      renew: jest.fn().mockResolvedValue(undefined),
+    };
+    await buildService();
+
+    await service.createManualPayment({ ...dto, termMonths: 2 }, 30111222);
+
+    expect(plans.findPlan).toHaveBeenCalledWith(1);
+    expect(subscriptions.renew).toHaveBeenCalledWith(7, 90);
+  });
+
+  it("keeps using the current plan's numDays when nothing is scheduled", async () => {
+    subscriptions = {
+      findSubscription: jest.fn().mockResolvedValue({
+        id: 7,
+        state: SubscriptionState.ACTIVE,
+        deleted: false,
+        scheduledPlanId: null,
+        plan: { id: 2, numDays: 30, price: 15000 },
+      }),
+      activate: jest.fn().mockResolvedValue(undefined),
+      renew: jest.fn().mockResolvedValue(undefined),
+    };
+    await buildService();
+
+    await service.createManualPayment(dto, 30111222);
+
+    expect(plans.findPlan).not.toHaveBeenCalled();
+    expect(subscriptions.renew).toHaveBeenCalledWith(7, 30);
+  });
+
+  // The bug this guards: renew() flips the plan on a SEPARATE, freshly
+  // fetched Subscription instance inside subscription.service.ts, so this
+  // method's own `subscription` local variable never sees the flip. Reading
+  // subscription.plan.price for monthlyPriceAtPurchase AFTER calling renew()
+  // would record the OLD plan's price on a Payment row whose `amount`
+  // already reflects the NEW (scheduled) plan — the same inconsistency
+  // RenewalService.chargeOne's effectivePlan resolution was written to avoid
+  // for the cron path.
+  it('records monthlyPriceAtPurchase from the scheduled plan, not the pre-renewal one', async () => {
+    subscriptions = {
+      findSubscription: jest.fn().mockResolvedValue({
+        id: 7,
+        state: SubscriptionState.ACTIVE,
+        deleted: false,
+        scheduledPlanId: 1,
+        plan: { id: 2, numDays: 30, price: 15000 },
+      }),
+      activate: jest.fn().mockResolvedValue(undefined),
+      renew: jest.fn().mockResolvedValue(undefined),
+    };
+    await buildService();
+
+    await service.createManualPayment(dto, 30111222);
+
+    expect(repository.save).toHaveBeenCalledWith(
+      expect.objectContaining({ monthlyPriceAtPurchase: 6000 }),
+    );
+  });
+});
+
 describe('createFromMercadoPago', () => {
   let service: PaymentService;
   let repository: {
@@ -389,6 +514,31 @@ describe('createFromMercadoPago', () => {
       expect.objectContaining({ registeredById: null, mpPaymentId: 'mp-123' }),
     );
     expect(result).toBeDefined();
+  });
+
+  it('persists mpOrderId from the dto', async () => {
+    subscriptions = {
+      findSubscription: jest.fn().mockResolvedValue({
+        id: 44,
+        state: SubscriptionState.PENDING,
+        deleted: false,
+        plan,
+      }),
+      activate: jest.fn().mockResolvedValue(undefined),
+      renew: jest.fn().mockResolvedValue(undefined),
+    };
+    await buildService(null);
+
+    const payment = await service.createFromMercadoPago({
+      mpPaymentId: 'mp-2',
+      subscriptionId: 44,
+      amount: 10000,
+      termMonths: 1,
+      payMethod: 'mercadopago',
+      mpOrderId: 'ORD02',
+    });
+
+    expect(payment.mpOrderId).toBe('ORD02');
   });
 
   it('renews instead of activating when the subscription is already active', async () => {
@@ -1093,6 +1243,161 @@ describe('PaymentService.confirmPlanCharge', () => {
     await expect(service.confirmPlanCharge(input)).rejects.toBeInstanceOf(
       NotFoundException,
     );
+  });
+
+  it('persists mpOrderId on the payment when the caller supplies one', async () => {
+    // (Reuse whatever plan/duration/subscription mocks the surrounding
+    // describe block's beforeEach already sets up for a successful charge —
+    // this test only adds the new field and reads it back off the saved row.)
+    const { payment } = await service.confirmPlanCharge({
+      mpPaymentId: 'mp-1',
+      userId: 3,
+      planId: 12,
+      months: 1,
+      amount: 19995,
+      payMethod: 'mercadopago',
+      mpOrderId: 'ORD01',
+    });
+
+    expect(payment.mpOrderId).toBe('ORD01');
+  });
+});
+
+describe('confirmPlanCharge for a prorated upgrade', () => {
+  let service: PaymentService;
+  let paymentRepository: { findOne: jest.Mock };
+  let dataSource: { transaction: jest.Mock };
+  let manager: { create: jest.Mock; save: jest.Mock };
+  let subscriptions: {
+    replaceActiveSubscription: jest.Mock;
+    findSubscription: jest.Mock;
+  };
+  let plans: { findPlan: jest.Mock };
+  let durations: { findByPlan: jest.Mock };
+  let users: { findUser: jest.Mock };
+
+  // What findSubscription (a real findOne, which DOES run eager relations)
+  // returns after the transaction commits — same hydration step
+  // confirmPlanCharge already exercises in the term-mode describe block above.
+  const hydratedSubscription = {
+    id: 11,
+    user: { email: 'a@b.c', name: 'Ana' },
+    plan: { name: 'Premium' },
+  };
+
+  beforeEach(async () => {
+    paymentRepository = {
+      findOne: jest.fn().mockResolvedValue(null),
+    };
+    manager = {
+      create: jest.fn((entityClass: new () => object, data: object) =>
+        Object.assign(new entityClass(), data),
+      ),
+      save: jest.fn((entity: unknown) => Promise.resolve(entity)),
+    };
+    dataSource = {
+      transaction: jest.fn((cb: (manager: unknown) => Promise<unknown>) =>
+        cb(manager),
+      ),
+    };
+    subscriptions = {
+      replaceActiveSubscription: jest.fn().mockResolvedValue({ id: 11 }),
+      findSubscription: jest.fn().mockResolvedValue(hydratedSubscription),
+    };
+    plans = {
+      // Premium's regular monthly price is 9000 — soldPrice on a prorated row
+      // must record this, never the 6100 actually collected.
+      findPlan: jest.fn().mockResolvedValue({
+        id: 2,
+        name: 'Premium',
+        price: 9000,
+        numDays: 30,
+        deleted: false,
+      }),
+    };
+    durations = { findByPlan: jest.fn().mockResolvedValue([]) };
+    users = { findUser: jest.fn() };
+
+    const moduleRef = await Test.createTestingModule({
+      providers: [
+        PaymentService,
+        { provide: getRepositoryToken(Payment), useValue: paymentRepository },
+        { provide: getDataSourceToken(), useValue: dataSource },
+        { provide: subscriptionService, useValue: subscriptions },
+        { provide: PlanService, useValue: plans },
+        { provide: PlanDurationService, useValue: durations },
+        { provide: UserService, useValue: users },
+      ],
+    }).compile();
+
+    service = moduleRef.get(PaymentService);
+  });
+
+  it('keeps the replaced end date and records the plan monthly price as soldPrice', async () => {
+    // soldPrice is what estimatedMrr divides. Recording the 6100 actually
+    // collected would report this member at 6100/month instead of 9000.
+    await service.confirmPlanCharge({
+      mpPaymentId: 'mp-1',
+      userId: 7,
+      planId: 2,
+      months: 0,
+      amount: 6100,
+      payMethod: 'mercadopago',
+      changeFromSubscriptionId: 10,
+      endDateOverride: '2026-03-31' as unknown as Date,
+    });
+
+    expect(subscriptions.replaceActiveSubscription).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        planId: 2,
+        soldPrice: 9000,
+        endDate: '2026-03-31',
+        changedFromSubscriptionId: 10,
+      }),
+    );
+  });
+
+  it('records termMonths 0, because a prorated adjustment buys no months', async () => {
+    await service.confirmPlanCharge({
+      mpPaymentId: 'mp-2',
+      userId: 7,
+      planId: 2,
+      months: 0,
+      amount: 6100,
+      payMethod: 'mercadopago',
+      changeFromSubscriptionId: 10,
+      endDateOverride: '2026-03-31' as unknown as Date,
+    });
+
+    expect(manager.create).toHaveBeenCalledWith(
+      Payment,
+      expect.objectContaining({
+        amount: 6100,
+        termMonths: 0,
+        monthlyPriceAtPurchase: 9000,
+      }),
+    );
+  });
+
+  it('stays idempotent, as Mercado Pago retries a notification up to eight times', async () => {
+    service.findByMpPaymentId = jest
+      .fn()
+      .mockResolvedValue({ id: 99, subscription: { id: 11 } });
+
+    const result = await service.confirmPlanCharge({
+      mpPaymentId: 'mp-1',
+      userId: 7,
+      planId: 2,
+      months: 0,
+      amount: 6100,
+      payMethod: 'mercadopago',
+      changeFromSubscriptionId: 10,
+      endDateOverride: '2026-03-31' as unknown as Date,
+    });
+
+    expect(result.payment.id).toBe(99);
+    expect(subscriptions.replaceActiveSubscription).not.toHaveBeenCalled();
   });
 });
 

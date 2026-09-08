@@ -51,9 +51,9 @@ const MemberChargeForm = ({
 }: MemberChargeFormProps) => {
   const {
     plans, plansError, planId, setPlanId, months, setMonths,
-    options, resolvedPrice, amountText, setAmountText, autoRenewedToday,
+    options, resolvedPrice, amountText, setAmountText, autoRenewedToday, quote,
     method, setMethod, orderView, isCreatingOrder, orderError,
-    isSaving, formError, success, submit, cancelOrder, resetOrder,
+    isSaving, formError, success, printWarning, submit, cancelOrder, resetOrder,
   } = useMemberCharge(selectedUser, onCharged);
 
   // While a point/qr order is pendiente the terminal (or the caja) is holding a
@@ -170,6 +170,14 @@ const MemberChargeForm = ({
             Se va a registrar como ${formatPriceDisplay(amount)}
           </p>
         )}
+        {/* Advisory only — self-service enforces the lock and the one-change
+            rule; an admin standing in front of the member decides, so the
+            charge button below stays enabled regardless of this note. */}
+        {quote && !quote.eligible && (
+          <p className="mt-1 text-sm text-text-muted">
+            Autoservicio lo rechazaría: {quote.message} Podés cobrarlo igual.
+          </p>
+        )}
       </div>
 
       <ChargeMethodTiles
@@ -182,6 +190,7 @@ const MemberChargeForm = ({
       <FormAlert type="error" message={orderError} />
       <FormAlert type="error" message={formError} />
       <FormAlert type="success" message={success} />
+      <FormAlert type="warning" message={printWarning} />
 
       {orderView ? (
         <PendingOrderView

@@ -17,6 +17,7 @@ import { SKIP_ALL_THROTTLERS } from '../../auth/auth.throttle';
 import { SubscriptionDto } from './dto/subscription-dto';
 import { ChangePlanDto } from './dto/change-plan-dto';
 import { SetAutoRenewDto } from './dto/set-auto-renew-dto';
+import { PlanChangeDto } from './dto/plan-change-dto';
 import { subscriptionService } from './subscription.service';
 import { SavedCardService } from '../savedCard/savedCard.service';
 import { isChargeable } from '../savedCard/savedCard.rules';
@@ -25,7 +26,7 @@ import { ActiveUser } from '../../common/decorators/active-user.decorator';
 import type { UserActiveInterface } from '../../common/interfaces/user-active.interface';
 import { Role } from '../../common/enum/role.enum';
 
-// Admin-only except /change-plan and /me (self-service, below). This
+// Admin-only except /me and /me/auto-renew (self-service, below). This
 // controller used to have no guard at all: anyone could list every
 // subscription — with each user's name, email and phone — or edit them.
 @Controller('api/v1/subscription')
@@ -39,17 +40,11 @@ export class subscriptionController {
     private readonly savedCardService: SavedCardService,
   ) {}
 
-  // Self-service: creates or renews the authenticated user's subscription on a
-  // different plan. userId comes from the JWT, never from the body — see
-  // ChangePlanDto.
-  @Post('change-plan')
-  @Auth(Role.USER)
-  changePlan(
-    @ActiveUser() user: UserActiveInterface,
-    @Body() dto: ChangePlanDto,
-  ) {
-    return this.subscriptionService.changePlan(user.sub, dto.planId);
-  }
+  // There is deliberately no member-facing change-plan route: a member's
+  // subscription is created or extended only by a paid checkout
+  // (modules/checkout) or by an admin. The old route opened a `pendiente`
+  // subscription to be settled in cash at the counter, which anyone with a
+  // member JWT could call to grant themselves a free pending plan.
 
   // Assigns a plan to a member from the Users panel or the new-member wizard.
   // No extra @Auth: the class-level guard already restricts this to ADMIN.
@@ -105,6 +100,27 @@ export class subscriptionController {
       subscription.id,
       dto.autoRenew,
     );
+  }
+
+  // Self-service, and free by construction: this route applies a lateral move
+  // or schedules a downgrade. An upgrade is refused here and must be paid
+  // through POST /checkout in plan-change mode — see applyPlanChange.
+  //
+  // Declared above the generic @Delete('/:id')/@Put() routes below, same
+  // reason as by-user/:id above: 'me' must never be parsed as a numeric id.
+  @Put('me/plan-change')
+  @Auth(Role.USER)
+  applyPlanChange(
+    @ActiveUser() user: UserActiveInterface,
+    @Body() dto: PlanChangeDto,
+  ) {
+    return this.subscriptionService.applyPlanChange(user.sub, dto.planId);
+  }
+
+  @Delete('me/plan-change')
+  @Auth(Role.USER)
+  cancelScheduledPlanChange(@ActiveUser() user: UserActiveInterface) {
+    return this.subscriptionService.cancelScheduledPlanChange(user.sub);
   }
 
   @Post()

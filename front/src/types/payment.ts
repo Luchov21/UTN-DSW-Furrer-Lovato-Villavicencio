@@ -18,6 +18,12 @@ export interface Payment {
   refundedAmount?: number | string | null;
   refundedAt?: string | null;
   deleted?: boolean;
+  // Set by POST /Payment/manual and /Payment/checkout only, and only for an
+  // efectivo/transferencia payment: whether the informational ticket printed
+  // on the front desk's Point terminal. Absent for every other payMethod —
+  // never treat "undefined" as a failure.
+  printStatus?: 'sent' | 'error' | 'not_configured';
+  printError?: string;
 }
 
 // Body of POST /Payment/manual: an in-person payment recorded by an admin.

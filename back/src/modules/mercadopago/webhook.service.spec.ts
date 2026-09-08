@@ -85,6 +85,54 @@ describe('WebhookService.handleNotification', () => {
     expect(orderResolver.close).toHaveBeenCalledWith('order-1', 77, 88);
   });
 
+  it('passes changeFromSubscriptionId/endDateOverride through for a prorated upgrade', async () => {
+    orderResolver.resolve.mockResolvedValue({
+      ...resolvedOrder,
+      termMonths: 0,
+      changeFromSubscriptionId: 10,
+      endDateOverride: '2026-03-31',
+    });
+
+    await service.handleNotification('mp-1', 'payment');
+
+    expect(paymentService.confirmPlanCharge).toHaveBeenCalledWith(
+      expect.objectContaining({
+        changeFromSubscriptionId: 10,
+        endDateOverride: '2026-03-31',
+      }),
+    );
+  });
+
+  // Final-review Important finding: a prorated plan change settled
+  // asynchronously (Point/QR/wallet) through this webhook must not leak
+  // resolved.termMonths (0 for a plan change) into the receipt as a literal
+  // "0 meses" — the mail service must see null instead.
+  it('sends the receipt with termMonths null for a prorated upgrade settled through the webhook', async () => {
+    orderResolver.resolve.mockResolvedValue({
+      ...resolvedOrder,
+      termMonths: 0,
+      changeFromSubscriptionId: 10,
+      endDateOverride: '2026-03-31',
+    });
+
+    await service.handleNotification('mp-1', 'payment');
+
+    expect(mailService.sendPaymentReceipt).toHaveBeenCalledWith(
+      expect.objectContaining({ termMonths: null }),
+    );
+  });
+
+  it('passes null changeFromSubscriptionId/endDateOverride for an ordinary term order', async () => {
+    await service.handleNotification('mp-1', 'payment');
+
+    expect(paymentService.confirmPlanCharge).toHaveBeenCalledWith(
+      expect.objectContaining({
+        changeFromSubscriptionId: null,
+        endDateOverride: null,
+      }),
+    );
+  });
+
   it('does not create anything when the amount does not match the snapshot', async () => {
     client.getPayment.mockResolvedValue({
       id: 'mp-underpaid',
@@ -350,6 +398,49 @@ describe('WebhookService.handleNotification', () => {
       ).resolves.toBeUndefined();
 
       expect(orderResolver.resolve).not.toHaveBeenCalled();
+      expect(paymentService.confirmPlanCharge).not.toHaveBeenCalled();
+    });
+
+    it('carries the order id through as mpOrderId', async () => {
+      client.getOrder.mockResolvedValue({
+        id: 'ORD01',
+        status: 'processed',
+        statusDetail: 'accredited',
+        externalReference: 'order-1',
+        totalPaidAmount: 14000,
+        paymentId: 'mp-order-pay-1',
+      });
+      orderResolver.resolve.mockResolvedValue({
+        userId: 3,
+        planId: 12,
+        termMonths: 1,
+        amount: 14000,
+        payMethod: 'qr',
+      });
+      paymentService.findByMpPaymentId.mockResolvedValue(null);
+      paymentService.confirmPlanCharge.mockResolvedValue({
+        payment: { id: 90 },
+        subscription: { id: 44, endDate: '2026-10-02', user: {}, plan: {} },
+      });
+
+      await service.handleNotification('ORD01', 'order');
+
+      expect(paymentService.confirmPlanCharge).toHaveBeenCalledWith(
+        expect.objectContaining({ mpOrderId: 'ORD01' }),
+      );
+    });
+
+    it('maps a failed order to rejected (does not record a payment)', async () => {
+      client.getOrder.mockResolvedValue({
+        id: 'ORD04',
+        status: 'failed',
+        statusDetail: 'cc_rejected_other_reason',
+        externalReference: 'order-1',
+        paymentId: 'mp-order-pay-4',
+      });
+
+      await service.handleNotification('ORD04', 'order');
+
       expect(paymentService.confirmPlanCharge).not.toHaveBeenCalled();
     });
   });

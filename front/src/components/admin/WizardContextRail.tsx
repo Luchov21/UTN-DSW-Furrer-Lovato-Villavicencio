@@ -32,8 +32,11 @@ const WizardContextRail = ({
 
       {generatedPassword && (
         <MemberCredentialsCard
+          userId={user.id}
           username={user.email}
           password={generatedPassword}
+          planName={summary?.plan.name}
+          termLabel={summary?.termLabel}
         />
       )}
 

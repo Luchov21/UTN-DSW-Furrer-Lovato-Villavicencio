@@ -51,10 +51,22 @@ export class ChargeOrder {
   @JoinColumn({ name: 'planDurationId' })
   planDuration!: PlanDuration | null;
 
-  // 'point' (card terminal) or 'qr' (shared printed code) — see
-  // ChargeOrderMethod.
+  // Non-null marks this order as a prorated plan-change upgrade rather than a
+  // term purchase, and names the subscription being replaced. The confirm path
+  // branches on it: an upgrade inherits the replaced subscription's endDate
+  // instead of opening a fresh term.
+  //
+  // termMonths on a row like this is 0 — a prorated adjustment is not a
+  // purchase of N months, and the column is nullable:false so it needs a
+  // value. Payment.termMonths uses the same convention for the same reason;
+  // the two must not disagree about what a prorated charge is.
+  @Column({ type: Number, nullable: true })
+  changeFromSubscriptionId!: number | null;
+
+  // 'point' (card terminal), 'qr' (shared printed code) or 'online' (member
+  // checkout, no physical collection point) — see ChargeOrderMethod.
   @Column({ type: 'varchar', length: 10, nullable: false })
-  method!: 'point' | 'qr';
+  method!: 'point' | 'qr' | 'online';
 
   @Column({ type: 'varchar', length: 64, nullable: false, unique: true })
   externalReference!: string;
@@ -79,8 +91,12 @@ export class ChargeOrder {
   // check in createCharge queries on this column, not on subscriptionId —
   // that's what makes a shared printed QR safe: two different members must
   // not be able to have simultaneous live orders on the same physical point.
-  @Column({ type: 'varchar', length: 64, nullable: false })
-  collectionPointId!: string;
+  //
+  // Null for an 'online' order: the member pays from their own browser, so
+  // there is no caja to hold. The busy-point check in createCharge queries on
+  // this column and is skipped entirely for that method.
+  @Column({ type: 'varchar', length: 64, nullable: true })
+  collectionPointId!: string | null;
 
   // Snapshotted from the resolved term's price at creation time. Never
   // recompute this from the term later — a price change after the order was
@@ -112,9 +128,11 @@ export class ChargeOrder {
   @Column({ type: Number, nullable: true })
   paymentId!: number | null;
 
-  // The admin who started the charge at the counter.
-  @Column({ type: Number, nullable: false })
-  createdById!: number;
+  // The admin who started the charge at the counter, or null when the member
+  // started it themselves from the checkout — the same meaning
+  // Payment.registeredById: null already carries for a cron renewal.
+  @Column({ type: Number, nullable: true })
+  createdById!: number | null;
 
   @Column({ type: 'datetime', nullable: false })
   createdAt!: Date;

@@ -22,6 +22,19 @@ import { Auth } from '../../auth/decorators/auth.decorator';
 import { ActiveUser } from '../../common/decorators/active-user.decorator';
 import type { UserActiveInterface } from '../../common/interfaces/user-active.interface';
 import { Role } from '../../common/enum/role.enum';
+import { ReceiptPrintService } from '../receipt/receipt-print.service';
+import { MercadoPagoConfig } from '../mercadopago/mercadopago.config';
+import type { ReceiptPayMethod } from '../receipt/receipt.html';
+import type { Payment } from './entity/payment.entity';
+
+// Payment methods that get an informational "cash/transferencia" ticket
+// printed on the front desk's Point terminal — a receipt of what the admin
+// already recorded, never a Mercado Pago charge. debito/credito already
+// leave a receipt with whatever external card machine took them.
+const PRINTABLE_PAY_METHODS: ReadonlySet<string> = new Set([
+  'efectivo',
+  'transferencia',
+]);
 
 // The whole payment module is admin-only except /me (self-service, below):
 // no public page depends on reading or writing someone else's payments.
@@ -31,7 +44,45 @@ import { Role } from '../../common/enum/role.enum';
 // Not rate limited — see auth.throttle.ts.
 @SkipThrottle(SKIP_ALL_THROTTLERS)
 export class PaymentController {
-  constructor(private readonly paymentService: PaymentService) {}
+  constructor(
+    private readonly paymentService: PaymentService,
+    private readonly receiptPrintService: ReceiptPrintService,
+    private readonly mercadoPagoConfig: MercadoPagoConfig,
+  ) {}
+
+  // Attaches printStatus (and printError, if any) to a just-saved payment
+  // when its method is printable. Printing is a side effect of an already
+  // -committed payment, so a failure here never turns into a failed
+  // response — it only changes what printStatus says.
+  private async withPrintedReceipt(
+    payment: Payment,
+    admin: UserActiveInterface,
+  ): Promise<Payment | Record<string, unknown>> {
+    if (!PRINTABLE_PAY_METHODS.has(payment.payMethod)) {
+      return payment;
+    }
+    if (
+      !this.mercadoPagoConfig.enabled ||
+      !this.mercadoPagoConfig.pointTerminalId
+    ) {
+      return { ...payment, printStatus: 'not_configured' };
+    }
+
+    const result = await this.receiptPrintService.printPaymentReceipt({
+      paymentId: payment.id,
+      amount: payment.amount,
+      date: payment.date,
+      payMethod: payment.payMethod as ReceiptPayMethod,
+      terminalId: this.mercadoPagoConfig.pointTerminalId,
+      cashier: admin.email,
+    });
+
+    return {
+      ...payment,
+      printStatus: result.status,
+      ...(result.errorMessage ? { printError: result.errorMessage } : {}),
+    };
+  }
 
   // Self-service: payment history of the authenticated user (see specs.md
   // §2.2/§3.5). userId comes from the JWT, never from a param.
@@ -43,11 +94,15 @@ export class PaymentController {
 
   // In-person payment recorded by an admin (specs.md §3.5).
   @Post('manual')
-  createManualPayment(
+  async createManualPayment(
     @ActiveUser() admin: UserActiveInterface,
     @Body() dto: ManualPaymentDto,
   ) {
-    return this.paymentService.createManualPayment(dto, admin.sub);
+    const payment = await this.paymentService.createManualPayment(
+      dto,
+      admin.sub,
+    );
+    return this.withPrintedReceipt(payment, admin);
   }
 
   // One in-person sale: plan + duration + amount + method in a single atomic
@@ -55,11 +110,15 @@ export class PaymentController {
   // already covers it, and a bare @Auth() here would REPLACE it and widen
   // the route to any logged-in member.
   @Post('checkout')
-  registerPlanPayment(
+  async registerPlanPayment(
     @ActiveUser() admin: UserActiveInterface,
     @Body() dto: PlanCheckoutDto,
   ) {
-    return this.paymentService.registerPlanPayment(dto, admin.sub);
+    const payment = await this.paymentService.registerPlanPayment(
+      dto,
+      admin.sub,
+    );
+    return this.withPrintedReceipt(payment, admin);
   }
 
   @Post()

@@ -8,6 +8,17 @@ export interface ChargeableCard {
   deleted: boolean;
   expirationMonth: number;
   expirationYear: number;
+  /**
+   * `credit_card` / `debit_card`, as Mercado Pago's Orders API requires it
+   * explicitly for every card charge. `null` on a card saved before this
+   * field existed — such a card cannot be charged until the member re-saves
+   * it, rather than guessing at a type that might be wrong. Optional (not
+   * just nullable) to match SavedCard's own `paymentTypeId?: string | null`
+   * column, so a real entity instance is structurally assignable here; the
+   * `!card.paymentTypeId` guard below already treats `undefined` the same
+   * as `null`.
+   */
+  paymentTypeId?: string | null;
 }
 
 /**
@@ -22,7 +33,7 @@ export interface ChargeableCard {
  * and false from the 1st of the following month on.
  */
 export function isChargeable(card: ChargeableCard, today: Date): boolean {
-  if (!card.active || card.deleted) {
+  if (!card.active || card.deleted || !card.paymentTypeId) {
     return false;
   }
 

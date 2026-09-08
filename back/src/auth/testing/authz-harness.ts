@@ -1,4 +1,4 @@
-import { INestApplication, Type } from '@nestjs/common';
+import { INestApplication, PipeTransform, Type } from '@nestjs/common';
 import { JwtModule, JwtService } from '@nestjs/jwt';
 import { Test } from '@nestjs/testing';
 import { Role } from '../../common/enum/role.enum';
@@ -28,11 +28,18 @@ let jwtService: JwtService | undefined;
  * `serviceMocks` is silently ignored and the real guard (with its real
  * dependencies) still gets constructed. `overrideGuard(...).useValue(...)` is
  * the API that actually reaches that map.
+ *
+ * `globalPipes` registers app-level pipes — pass main.ts's own ValidationPipe
+ * where a test needs the DTO decorators actually enforced. They must be
+ * registered BEFORE `app.init()`: Nest resolves a route's pipes while it
+ * explores the controller, so anything added afterwards never runs. Empty by
+ * default, so every existing caller keeps exercising guards alone.
  */
 export async function buildAuthzApp(
   controller: Type<unknown>,
   serviceMocks: ServiceMock[],
   guardOverrides: ServiceMock[] = [],
+  globalPipes: PipeTransform[] = [],
 ): Promise<INestApplication> {
   const builder = Test.createTestingModule({
     imports: [
@@ -56,6 +63,9 @@ export async function buildAuthzApp(
   const moduleRef = await builder.compile();
 
   const app = moduleRef.createNestApplication();
+  if (globalPipes.length > 0) {
+    app.useGlobalPipes(...globalPipes);
+  }
   jwtService = moduleRef.get(JwtService);
   await app.init();
   return app;

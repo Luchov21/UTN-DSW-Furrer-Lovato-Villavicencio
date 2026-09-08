@@ -66,14 +66,22 @@ export class MailService {
     name: string;
     planName: string;
     amount: number;
-    termMonths: number;
+    // null marks a prorated plan-change payment — it buys no term, so there
+    // is no month count to show. The caller (CheckoutService.settle) passes
+    // null exactly when charge.termMonths is 0, never a bare 0/undefined
+    // here, so this template never has to guess.
+    termMonths: number | null;
     method: string;
     newEndDate: Date | string;
   }): Promise<void> {
     try {
       const formattedAmount = `$${data.amount.toLocaleString('es-AR')}`;
       const formattedEndDate = this.formatDateDDMMYYYY(data.newEndDate);
-      const text = `Hola ${data.name},\n\nTe enviamos tu recibo de pago:\n\nMonto: ${formattedAmount}\nPlan: ${data.planName}\nDuración: ${data.termMonths} ${data.termMonths === 1 ? 'mes' : 'meses'}\nMétodo de pago: ${data.method}\nNueva fecha de vencimiento: ${formattedEndDate}\n\nGracias por tu confianza en FLG.`;
+      const durationLine =
+        data.termMonths === null
+          ? 'Ajuste de plan'
+          : `${data.termMonths} ${data.termMonths === 1 ? 'mes' : 'meses'}`;
+      const text = `Hola ${data.name},\n\nTe enviamos tu recibo de pago:\n\nMonto: ${formattedAmount}\nPlan: ${data.planName}\nDuración: ${durationLine}\nMétodo de pago: ${data.method}\nNueva fecha de vencimiento: ${formattedEndDate}\n\nGracias por tu confianza en FLG.`;
 
       const html = `
                 <h3>Recibo de pago — FLG</h3>
@@ -82,7 +90,7 @@ export class MailService {
                 <ul>
                   <li><strong>Monto:</strong> ${formattedAmount}</li>
                   <li><strong>Plan:</strong> ${data.planName}</li>
-                  <li><strong>Duración:</strong> ${data.termMonths} ${data.termMonths === 1 ? 'mes' : 'meses'}</li>
+                  <li><strong>Duración:</strong> ${durationLine}</li>
                   <li><strong>Método de pago:</strong> ${data.method}</li>
                   <li><strong>Nueva fecha de vencimiento:</strong> ${formattedEndDate}</li>
                 </ul>

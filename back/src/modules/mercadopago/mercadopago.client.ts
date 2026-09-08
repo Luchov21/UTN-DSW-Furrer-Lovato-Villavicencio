@@ -1,11 +1,16 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import MpSdkConfig, {
   CardToken,
   Customer,
   Order,
   Payment,
   PaymentRefund,
+  Preference,
 } from 'mercadopago';
+import {
+  buildPreferenceBody,
+  type PreferenceBodyInput,
+} from '../checkout/checkout-preference.rules';
 import { MercadoPagoConfig } from './mercadopago.config';
 
 /**
@@ -18,6 +23,36 @@ import { MercadoPagoConfig } from './mercadopago.config';
  * silently broke every QR charge.
  */
 export const QR_MODE_HYBRID = 'hybrid';
+
+/**
+ * Translates an Orders API order/transaction status into the classic
+ * Payments API status vocabulary every caller of `MpPaymentResult` already
+ * branches on (`approved`/`rejected`/`in_process`). `webhook.service.ts`'s
+ * `fetchPaymentLike` and `MercadoPagoClient`'s own online-order charging both
+ * use this — a synchronous charge and a later webhook retry for the same
+ * order must always compute the same status, or the idempotency check in
+ * `WebhookService.handleNotification` (keyed on the resulting `mpPaymentId`)
+ * can't recognize them as the same thing.
+ */
+export function mapOrderStatusToPaymentStatus(
+  status: string | undefined,
+): string | undefined {
+  switch (status) {
+    case 'processed':
+      return 'approved';
+    case 'failed':
+      return 'rejected';
+    case 'processing':
+    case 'action_required':
+      return 'in_process';
+    case 'canceled':
+      return 'cancelled';
+    default:
+      // 'refunded', 'charged_back', 'created', or anything future — passed
+      // through as-is. Neither current caller branches on these today.
+      return status;
+  }
+}
 
 /**
  * Thrown by every `MercadoPagoClient` method when the SDK call could not be
@@ -56,6 +91,14 @@ export interface MpSavedCard {
   lastFourDigits?: string;
   /** e.g. `visa`, `master` — nested under `payment_method` in the raw response. */
   paymentMethodId?: string;
+  /**
+   * `credit_card`/`debit_card` — also nested under `payment_method` in the
+   * raw response. Both `saveCard` (the classic Customers API) and `getCard`
+   * (listing a customer's saved cards) return it; a card saved through
+   * `saveCard` with this left unset is permanently unchargeable by
+   * `isChargeable`, so mapping it is not optional.
+   */
+  paymentTypeId?: string;
   expirationMonth?: number;
   expirationYear?: number;
 }
@@ -66,7 +109,35 @@ export interface ChargeSavedCardInput {
   /** Amount to charge, in the account's currency units (e.g. ARS, not cents). */
   amount: number;
   description?: string;
+  /** Maps the payment back to its ChargeOrder if the local write fails. */
+  externalReference?: string;
   idempotencyKey: string;
+  /** Card brand, e.g. `master` — from the SavedCard row. */
+  paymentMethodId: string;
+  /** `credit_card` or `debit_card` — from the SavedCard row. */
+  paymentTypeId: string;
+}
+
+export interface ChargeCardTokenInput {
+  token: string;
+  /** Amount to charge, in the account's currency units (e.g. ARS, not cents). */
+  amount: number;
+  description?: string;
+  /** Maps the payment back to its ChargeOrder if the local write fails. */
+  externalReference: string;
+  idempotencyKey: string;
+  /** Card brand, e.g. `visa` — from the Card Payment Brick's onSubmit. */
+  paymentMethodId: string;
+  /** `credit_card` or `debit_card` — from the Card Payment Brick's onSubmit. */
+  paymentTypeId: string;
+  /**
+   * Present only when the member asked to save the card: scoping the payment
+   * to a Mercado Pago customer is what attaches the card to it, since the
+   * token itself is single-use and is spent by this charge.
+   */
+  customerId?: string;
+  /** Used as the payer when there is no customer. */
+  payerEmail?: string;
 }
 
 /** Normalized shape for both `chargeSavedCard` and `getPayment`. */
@@ -85,12 +156,46 @@ export interface MpPaymentResult {
    * external_reference on that call yet.
    */
   externalReference?: string;
+  /**
+   * The Orders API order id this payment belongs to, when it originated from
+   * one (an online checkout charge or a renewal). `undefined` for a payment
+   * that went through the classic Payments API. `RefundService` uses this to
+   * decide which refund endpoint a payment needs.
+   */
+  mpOrderId?: string;
+  /**
+   * The card this payment was made with, as Mercado Pago echoes it back on
+   * the payment itself. When the charge was scoped to a customer, `id` is
+   * that customer's saved card id — which is what lets the checkout persist
+   * a `SavedCard` with no second API call, the token having already been
+   * spent by the charge.
+   *
+   * Absent whenever the response carries no card at all (a rejected payment,
+   * a non-card method). Every sub-field but `id` mirrors the SDK's own
+   * optionality, so a caller that needs a complete card must check them.
+   */
+  card?: {
+    id: string;
+    lastFourDigits?: string;
+    paymentMethodId?: string;
+    /** `credit_card`/`debit_card` — from the request, echoed back here so
+     * `rememberCard` can save it onto the new SavedCard row. */
+    paymentTypeId?: string;
+    expirationMonth?: number;
+    expirationYear?: number;
+  };
 }
 
 export interface MpRefundResult {
   id: string;
   status?: string;
   amount?: number;
+}
+
+export interface MpPreferenceResult {
+  id: string;
+  /** Checkout Pro's hosted URL. Only used by the A1 fallback (see the spec). */
+  initPoint?: string;
 }
 
 export interface MpOrderResult {
@@ -163,6 +268,9 @@ type SdkCustomerResponse = Awaited<
 type SdkCardResponse = Awaited<
   ReturnType<InstanceType<typeof Customer>['createCard']>
 >;
+type SdkCardListResponse = Awaited<
+  ReturnType<InstanceType<typeof Customer>['listCards']>
+>;
 type SdkCardTokenResponse = Awaited<
   ReturnType<InstanceType<typeof CardToken>['create']>
 >;
@@ -191,6 +299,8 @@ type SdkOrderCreateBody = Parameters<
  */
 @Injectable()
 export class MercadoPagoClient {
+  private readonly logger = new Logger(MercadoPagoClient.name);
+
   /** Memoized on first `getSdkConfig()` call — never built while disabled. */
   private sdkConfig?: MpSdkConfig;
 
@@ -215,6 +325,13 @@ export class MercadoPagoClient {
     operation: string,
     err: unknown,
   ): MercadoPagoUnavailableError {
+    // Idempotent: chargeOnlineOrder wraps a raw-fetch failure itself (to
+    // attach the parsed `errors` array a plain network/JSON error doesn't
+    // have) before its own outer catch also calls this — without this guard
+    // the message would double-prefix itself on every such failure.
+    if (err instanceof MercadoPagoUnavailableError) {
+      return err;
+    }
     const detail = err instanceof Error ? err.message : String(err);
     // status/causes are MP's own HTTP status code and structured validation
     // feedback about the REQUEST we sent — not secrets, and the only way to
@@ -239,12 +356,27 @@ export class MercadoPagoClient {
     if (payment.id === undefined) {
       throw new Error('Mercado Pago did not return a payment id.');
     }
+    // `card` is an empty object on a payment that never had one, so the id —
+    // not the presence of the key — is what decides whether there is a card
+    // worth reporting. payment_method_id lives on the payment, not on the
+    // nested card, exactly as `saveCard` reads it from `payment_method.id`.
+    const card = payment.card?.id
+      ? {
+          id: payment.card.id,
+          lastFourDigits: payment.card.last_four_digits,
+          paymentMethodId: payment.payment_method_id,
+          expirationMonth: payment.card.expiration_month,
+          expirationYear: payment.card.expiration_year,
+        }
+      : undefined;
+
     return {
       id: String(payment.id),
       status: payment.status,
       statusDetail: payment.status_detail,
       transactionAmount: payment.transaction_amount,
       externalReference: payment.external_reference,
+      card,
     };
   }
 
@@ -292,6 +424,46 @@ export class MercadoPagoClient {
   }
 
   /**
+   * Creates the preference that backs the Payment Brick's Mercado Pago
+   * option. The body is built by a pure function so its rules are tested
+   * without a network; this method only talks to the SDK.
+   *
+   * The caller must have resolved the price itself — `input.amount` is the
+   * server's number, never the browser's.
+   */
+  async createPreference(
+    input: PreferenceBodyInput,
+  ): Promise<MpPreferenceResult> {
+    const sdkConfig = this.getSdkConfig();
+    try {
+      const preferenceClient = new Preference(sdkConfig);
+      const preferenceBody = buildPreferenceBody(input);
+      const created = await preferenceClient.create({
+        body: {
+          ...preferenceBody,
+          // The installed SDK's `Items` type requires an `id` per line item;
+          // the Preferences API itself does not. `buildPreferenceBody`
+          // (Task 3) deliberately omits it — this preference always has
+          // exactly one item, already identified end-to-end by
+          // `external_reference`, not a catalog id. The index-based value
+          // below exists only to satisfy the SDK's type, the same class of
+          // types-lag-the-API gap as `createOrder`'s `config` cast above.
+          items: preferenceBody.items.map((item, index) => ({
+            ...item,
+            id: String(index),
+          })),
+        },
+      });
+      if (!created.id) {
+        throw new Error('Mercado Pago did not return a preference id.');
+      }
+      return { id: created.id, initPoint: created.init_point };
+    } catch (err) {
+      throw this.wrapError('createPreference', err);
+    }
+  }
+
+  /**
    * Saves a card for a customer from a (one-time) card token produced by
    * the front-end's tokenization flow.
    */
@@ -310,6 +482,7 @@ export class MercadoPagoClient {
         id: card.id,
         lastFourDigits: card.last_four_digits,
         paymentMethodId: card.payment_method?.id,
+        paymentTypeId: card.payment_method?.payment_type_id,
         expirationMonth: card.expiration_month,
         expirationYear: card.expiration_year,
       };
@@ -329,6 +502,193 @@ export class MercadoPagoClient {
   }
 
   /**
+   * Looks up one card in a customer's saved-card list by id. Used only after
+   * an online-order charge that attaches a NEW card to a customer: the order
+   * response echoes the new card's id (`payment_method.card_id`) but not its
+   * last-four-digits/expiration, so this fills in the rest — one call, only
+   * on the save-card path, never in the common (no-save) charge path.
+   */
+  async getCard(
+    customerId: string,
+    cardId: string,
+  ): Promise<MpSavedCard | undefined> {
+    const sdkConfig = this.getSdkConfig();
+    try {
+      const customerClient = new Customer(sdkConfig);
+      const cards: SdkCardListResponse = await customerClient.listCards({
+        customerId,
+      });
+      const card = cards.find((c) => c.id === cardId);
+      if (!card?.id) {
+        return undefined;
+      }
+
+      return {
+        id: card.id,
+        lastFourDigits: card.last_four_digits,
+        paymentMethodId: card.payment_method?.id,
+        paymentTypeId: card.payment_method?.payment_type_id,
+        expirationMonth: card.expiration_month,
+        expirationYear: card.expiration_year,
+      };
+    } catch (err) {
+      throw this.wrapError('getCard', err);
+    }
+  }
+
+  /**
+   * Builds and charges a `type: "online"` Orders API order — the shared
+   * implementation behind both `chargeCardToken` (a fresh single-use token)
+   * and `chargeSavedCard` (a token freshly minted from a saved card). Adapts
+   * the order response back into `MpPaymentResult`, the same shape the
+   * classic Payments API path this replaces already returned, so neither
+   * caller needs to change how it reads the result.
+   *
+   * Talks to `POST /v1/orders` via raw `fetch`, not the SDK's `Order`
+   * client — confirmed against the SDK's own source
+   * (`utils/errors/index.js`'s `MercadoPagoError` constructor only reads
+   * `body.message`/`body.error`/`body.cause`) that a validation failure on
+   * this endpoint comes back as `{ errors: [...] }`, a newer shape the SDK's
+   * error parser doesn't recognize — it silently drops that array and every
+   * caller sees a bare, useless "MercadoPago API error". Parsing the raw
+   * response ourselves is the only way to surface the real reason.
+   */
+  private async chargeOnlineOrder(input: {
+    token: string;
+    amount: number;
+    description?: string;
+    externalReference?: string;
+    idempotencyKey: string;
+    customerId?: string;
+    payerEmail?: string;
+    paymentMethodId: string;
+    paymentTypeId: string;
+    /** Only the new-card checkout path needs the extra getCard round trip. */
+    includeCardDetails: boolean;
+  }): Promise<MpPaymentResult> {
+    this.getSdkConfig();
+    const accessToken = this.config.accessToken as string;
+    const amountStr = input.amount.toFixed(2);
+    try {
+      let response: Response;
+      try {
+        response = await fetch('https://api.mercadopago.com/v1/orders', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+            'X-Idempotency-Key': input.idempotencyKey,
+          },
+          body: JSON.stringify({
+            type: 'online',
+            processing_mode: 'automatic',
+            external_reference: input.externalReference,
+            total_amount: amountStr,
+            description: input.description,
+            payer: input.customerId
+              ? { customer_id: input.customerId }
+              : { email: input.payerEmail },
+            transactions: {
+              payments: [
+                {
+                  amount: amountStr,
+                  payment_method: {
+                    id: input.paymentMethodId,
+                    type: input.paymentTypeId,
+                    token: input.token,
+                    installments: 1,
+                  },
+                },
+              ],
+            },
+          }),
+        });
+      } catch (err) {
+        throw this.wrapError('chargeOnlineOrder', err);
+      }
+
+      interface RawOrderErrorItem {
+        code?: string;
+        message?: string;
+      }
+      const responseBody: SdkOrderResponse & { errors?: RawOrderErrorItem[] } =
+        await response.json().catch(() => ({}) as SdkOrderResponse);
+      if (!response.ok) {
+        const errors = Array.isArray(responseBody.errors)
+          ? responseBody.errors
+          : [];
+        const message =
+          errors.length > 0
+            ? errors.map((e) => e.message).filter(Boolean).join('; ')
+            : undefined;
+        // wrapError only reads `.message` off an actual Error instance (it
+        // falls back to String(err) for a plain object, which stringifies
+        // to the useless "[object Object]") — so the parsed reason has to
+        // be attached to a real Error, not passed as a bare object.
+        throw this.wrapError(
+          'chargeOnlineOrder',
+          Object.assign(new Error(message ?? 'MercadoPago API error'), {
+            status: response.status,
+            causes: errors,
+          }),
+        );
+      }
+      const order = responseBody;
+
+      const txPayment = order.transactions?.payments?.[0];
+      if (!txPayment?.id) {
+        throw new Error(
+          'Mercado Pago did not return a transaction payment id.',
+        );
+      }
+
+      let card: MpPaymentResult['card'];
+      const cardId = txPayment.payment_method?.card_id;
+      if (input.includeCardDetails && input.customerId && cardId) {
+        // The order already charged successfully by this point — a failure
+        // to fetch the card's display details afterward must not report an
+        // approved payment as an outage (that would close the ChargeOrder as
+        // ERROR with no recovery path, even though the money already moved).
+        // rememberCard in checkout.service.ts already handles `card ===
+        // undefined` by logging and skipping the save.
+        try {
+          const savedCard = await this.getCard(input.customerId, cardId);
+          if (savedCard?.lastFourDigits !== undefined) {
+            card = {
+              id: savedCard.id,
+              lastFourDigits: savedCard.lastFourDigits,
+              paymentMethodId: savedCard.paymentMethodId,
+              paymentTypeId: input.paymentTypeId,
+              expirationMonth: savedCard.expirationMonth,
+              expirationYear: savedCard.expirationYear,
+            };
+          }
+        } catch (err) {
+          this.logger.warn(
+            `Approved order ${order.id} could not fetch card details for customer ${input.customerId}`,
+            err instanceof Error ? err.stack : err,
+          );
+        }
+      }
+
+      return {
+        id: String(txPayment.id),
+        status: mapOrderStatusToPaymentStatus(order.status),
+        statusDetail: order.status_detail,
+        transactionAmount:
+          order.total_paid_amount !== undefined
+            ? Number(order.total_paid_amount)
+            : undefined,
+        externalReference: order.external_reference,
+        mpOrderId: order.id,
+        card,
+      };
+    } catch (err) {
+      throw this.wrapError('chargeOnlineOrder', err);
+    }
+  }
+
+  /**
    * Charges a previously saved card. A saved card's id cannot be charged
    * directly as a payment token — Mercado Pago requires a fresh, single-use
    * token minted from the saved card immediately before the charge, which is
@@ -339,31 +699,54 @@ export class MercadoPagoClient {
   async chargeSavedCard(input: ChargeSavedCardInput): Promise<MpPaymentResult> {
     const sdkConfig = this.getSdkConfig();
     const { customerId, cardId, amount, description, idempotencyKey } = input;
+    let freshToken: SdkCardTokenResponse;
     try {
       const cardTokenClient = new CardToken(sdkConfig);
-      const freshToken: SdkCardTokenResponse = await cardTokenClient.create({
+      freshToken = await cardTokenClient.create({
         body: { card_id: cardId, customer_id: customerId },
       });
       if (!freshToken.id) {
         throw new Error('Mercado Pago did not return a fresh card token.');
       }
-
-      const paymentClient = new Payment(sdkConfig);
-      const payment = await paymentClient.create({
-        body: {
-          transaction_amount: amount,
-          token: freshToken.id,
-          description,
-          payer: { type: 'customer', id: customerId },
-          installments: 1,
-          capture: true,
-        },
-        requestOptions: { idempotencyKey },
-      });
-      return this.normalizePayment(payment);
     } catch (err) {
       throw this.wrapError('chargeSavedCard', err);
     }
+
+    return this.chargeOnlineOrder({
+      token: freshToken.id,
+      amount,
+      description,
+      externalReference: input.externalReference,
+      idempotencyKey,
+      customerId,
+      paymentMethodId: input.paymentMethodId,
+      paymentTypeId: input.paymentTypeId,
+      includeCardDetails: false,
+    });
+  }
+
+  /**
+   * Charges a card the member has just entered, using the single-use token the
+   * Card Payment Brick minted in their browser. Unlike `chargeSavedCard`, no
+   * token is minted here — the browser already did it, and this token cannot
+   * be reused afterwards.
+   *
+   * A declined card resolves normally with `status: 'rejected'`; only a
+   * failure to complete the call at all throws.
+   */
+  async chargeCardToken(input: ChargeCardTokenInput): Promise<MpPaymentResult> {
+    return this.chargeOnlineOrder({
+      token: input.token,
+      amount: input.amount,
+      description: input.description,
+      externalReference: input.externalReference,
+      idempotencyKey: input.idempotencyKey,
+      customerId: input.customerId,
+      payerEmail: input.payerEmail,
+      paymentMethodId: input.paymentMethodId,
+      paymentTypeId: input.paymentTypeId,
+      includeCardDetails: true,
+    });
   }
 
   async getPayment(mpPaymentId: string): Promise<MpPaymentResult> {
@@ -400,6 +783,42 @@ export class MercadoPagoClient {
       };
     } catch (err) {
       throw this.wrapError('refundPayment', err);
+    }
+  }
+
+  /**
+   * Refunds one transaction within an Orders API order — the only refund
+   * path that works for a payment created by `chargeCardToken`/
+   * `chargeSavedCard` (see `RefundService.issue`); the classic
+   * `POST /v1/payments/{id}/refunds` endpoint `refundPayment` uses does not
+   * accept an Orders API transaction id.
+   */
+  async refundOrder(
+    orderId: string,
+    transactionId: string,
+    amount: number,
+    idempotencyKey: string,
+  ): Promise<MpRefundResult> {
+    const sdkConfig = this.getSdkConfig();
+    try {
+      const orderClient = new Order(sdkConfig);
+      const order = await orderClient.refund({
+        id: orderId,
+        body: {
+          transactions: [{ id: transactionId, amount: amount.toFixed(2) }],
+        },
+        requestOptions: { idempotencyKey },
+      });
+      if (!order.id) {
+        throw new Error('Mercado Pago did not return an order id.');
+      }
+      return {
+        id: order.id,
+        status: order.status,
+        amount,
+      };
+    } catch (err) {
+      throw this.wrapError('refundOrder', err);
     }
   }
 

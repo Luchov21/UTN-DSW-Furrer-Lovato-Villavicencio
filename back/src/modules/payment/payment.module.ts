@@ -6,6 +6,8 @@ import { PaymentController } from './payment.controller';
 import { SubscriptionModule } from '../subscription/subscription.module';
 import { UserModule } from '../user/user.module';
 import { PlanModule } from '../plan/plan.module';
+import { ReceiptModule } from '../receipt/receipt.module';
+import { MercadoPagoModule } from '../mercadopago/mercadopago.module';
 
 @Module({
   imports: [
@@ -13,6 +15,8 @@ import { PlanModule } from '../plan/plan.module';
     SubscriptionModule,
     UserModule,
     PlanModule,
+    ReceiptModule,
+    MercadoPagoModule,
   ],
   controllers: [PaymentController],
   providers: [PaymentService],

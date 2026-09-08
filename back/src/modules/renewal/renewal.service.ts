@@ -9,6 +9,7 @@ import {
 import { subscriptionService } from '../subscription/subscription.service';
 import { SavedCardService } from '../savedCard/savedCard.service';
 import { PaymentService } from '../payment/payment.service';
+import { PlanService } from '../plan/plan.service';
 import { MailService } from '../../common/mail/mail.service';
 import {
   renewalDueDates,
@@ -44,6 +45,7 @@ export class RenewalService {
     private readonly mercadoPagoClient: MercadoPagoClient,
     private readonly paymentService: PaymentService,
     private readonly mailService: MailService,
+    private readonly planService: PlanService,
   ) {}
 
   @Cron(CronExpression.EVERY_DAY_AT_4AM)
@@ -124,7 +126,15 @@ export class RenewalService {
       return 'skipped';
     }
 
-    const amount = sub.plan.price;
+    // The plan the next term will actually open on — renew() applies a
+    // scheduled downgrade, so charging sub.plan.price here would bill the
+    // member for a plan they are leaving.
+    const effectivePlan =
+      sub.scheduledPlanId != null
+        ? ((await this.planService.findPlan(sub.scheduledPlanId)) ?? sub.plan)
+        : sub.plan;
+
+    const amount = effectivePlan.price;
     const idempotencyKey = `renewal-${sub.id}-${endDateStr}`;
 
     let result: MpPaymentResult;
@@ -135,6 +145,10 @@ export class RenewalService {
         amount,
         description: `Renovación de membresía — suscripción #${sub.id}`,
         idempotencyKey,
+        paymentMethodId: card.paymentMethodId,
+        // card.paymentTypeId is string | null on the entity; isChargeable,
+        // called just above, already guarantees it's non-null here.
+        paymentTypeId: card.paymentTypeId as string,
       });
     } catch (err) {
       if (err instanceof MercadoPagoUnavailableError) {
@@ -152,6 +166,7 @@ export class RenewalService {
     if (result.status === 'approved') {
       await this.paymentService.createFromMercadoPago({
         mpPaymentId: result.id,
+        mpOrderId: result.mpOrderId,
         subscriptionId: sub.id,
         amount,
         // Auto-renewal always renews by ONE month, never the member's
@@ -162,17 +177,17 @@ export class RenewalService {
       });
 
       // Mirrors exactly what promoteOrExtendSubscription computes internally
-      // for termMonths = 1 (1 * plan.numDays), so the receipt shows the real
-      // new endDate without an extra query back to the subscription.
+      // for termMonths = 1 (1 * effectivePlan.numDays), so the receipt shows
+      // the real new endDate without an extra query back to the subscription.
       const { endDate: newEndDate } = renewalPeriod(
         endDateStr,
-        sub.plan.numDays,
+        effectivePlan.numDays,
       );
 
       await this.mailService.sendPaymentReceipt({
         to: sub.user.email,
         name: sub.user.name,
-        planName: sub.plan.name,
+        planName: effectivePlan.name,
         amount,
         termMonths: 1,
         method: 'mercadopago',
@@ -190,7 +205,10 @@ export class RenewalService {
       amount,
       payMethod: 'mercadopago',
       termMonths: 1,
-      monthlyPriceAtPurchase: sub.plan.price,
+      // Same effectivePlan as `amount` above: a declined attempt to renew
+      // onto a scheduled plan was never an attempt to renew at the old
+      // plan's price.
+      monthlyPriceAtPurchase: effectivePlan.price,
     });
 
     // dueDates is furthest-first: index 0 is the FIRST attempt
@@ -205,7 +223,7 @@ export class RenewalService {
       await this.mailService.sendRenewalFailure({
         to: sub.user.email,
         name: sub.user.name,
-        planName: sub.plan.name,
+        planName: effectivePlan.name,
         endDate: sub.endDate,
         isFinalAttempt: isFinal,
       });

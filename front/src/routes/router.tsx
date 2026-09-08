@@ -8,10 +8,16 @@ import Classes from '../pages/Classes/Classes';
 import About from '../pages/About/About';
 import Contact from '../pages/Contact/Contact';
 import Plan from '../pages/Plan/Plan';
+import Checkout from '../pages/Checkout/Checkout';
+import CheckoutWallet from '../pages/Checkout/CheckoutWallet';
+import CheckoutReturn from '../pages/Checkout/CheckoutReturn';
 import NotFound from '../pages/NotFound/NotFound';
 import Trainers from '../pages/Trainers/Trainers';
 import Dashboard from '../pages/Dashboard/Dashboard';
 import AdminDashboard from '../pages/Admin/AdminDashboard';
+import Terms from '../pages/Legal/Terms';
+import Privacy from '../pages/Legal/Privacy';
+import Rules from '../pages/Legal/Rules';
 import ProtectedRoute from './ProtectedRoute';
 import RootLayout from './RootLayout';
 
@@ -57,6 +63,26 @@ export const router = createBrowserRouter([
         element: <Plan />,
       },
       {
+        path: '/checkout',
+        element: <Checkout />,
+      },
+      {
+        path: '/checkout/wallet',
+        element: (
+          <ProtectedRoute>
+            <CheckoutWallet />
+          </ProtectedRoute>
+        ),
+      },
+      {
+        path: '/checkout/return',
+        element: (
+          <ProtectedRoute>
+            <CheckoutReturn />
+          </ProtectedRoute>
+        ),
+      },
+      {
         path: '/trainers',
         element: <Trainers />,
       },
@@ -75,6 +101,18 @@ export const router = createBrowserRouter([
             <AdminDashboard />
           </ProtectedRoute>
         ),
+      },
+      {
+        path: '/terms',
+        element: <Terms />,
+      },
+      {
+        path: '/privacy',
+        element: <Privacy />,
+      },
+      {
+        path: '/rules',
+        element: <Rules />,
       },
       {
         path: '*',

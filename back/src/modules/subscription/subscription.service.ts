@@ -19,7 +19,14 @@ import { SubscriptionState } from './enum/subscription-state.enum';
 import { PlanService } from '../plan/plan.service';
 import { UserService } from '../user/user.service';
 import { ResolvedTerm } from '../plan/plan-duration.rules';
+import type { CurrentTerm } from './plan-change.rules';
 import {
+  assessChange,
+  blockMessage,
+  PLAN_CHANGE_LOCK_DAYS,
+} from './plan-change.rules';
+import {
+  addDays,
   dayAfter,
   isCurrentOn,
   renewalPeriod,
@@ -156,6 +163,11 @@ export class subscriptionService {
       // by the term's months, so recording the list price here would report
       // revenue the gym never billed.
       soldPrice: number;
+      // Set only by a prorated plan change: the new subscription inherits the
+      // replaced term's endDate instead of opening a fresh period, which is
+      // what makes an upgrade cost only the difference.
+      endDate?: Date;
+      changedFromSubscriptionId?: number;
     },
   ): Promise<Subscription> {
     const live = await manager.find(Subscription, {
@@ -187,18 +199,29 @@ export class subscriptionService {
 
     for (const previous of live) {
       previous.state = SubscriptionState.CANCELLED;
+      // A downgrade scheduled on the row being replaced must not survive onto
+      // the plan the member just paid to move to.
+      previous.scheduledPlanId = null;
       await manager.save(previous);
     }
 
     // subscriptionPeriod, not a local calculation: a subscription created here
     // and one created by changePlan must not get their dates computed
-    // differently — only the `from` argument varies here.
+    // differently — only the `from` argument varies here. Unless the caller
+    // supplies an endDate (a prorated plan change), in which case the new row
+    // inherits the replaced term's end instead of opening a fresh one.
+    const period = input.endDate
+      ? { startDate: toDateOnly(new Date()) as unknown as Date, endDate: input.endDate }
+      : subscriptionPeriod(input.term.numDays, from);
+
     const created = manager.create(Subscription, {
       userId: input.userId,
       planId: input.planId,
-      planDurationId: input.term.planDurationId,
+      // A prorated change buys no term, so it has no duration to point at.
+      planDurationId: input.endDate ? null : input.term.planDurationId,
       soldPrice: input.soldPrice,
-      ...subscriptionPeriod(input.term.numDays, from),
+      changedFromSubscriptionId: input.changedFromSubscriptionId ?? null,
+      ...period,
       state: SubscriptionState.ACTIVE,
       deleted: false,
     });
@@ -290,6 +313,23 @@ export class subscriptionService {
       throw new NotFoundException(`La suscripción con ID: ${id} no existe.`);
     }
 
+    // A downgrade scheduled mid-term takes effect exactly here: the next term
+    // is the first one the member has not already paid for on the old plan.
+    if (subscription.scheduledPlanId != null) {
+      const scheduled = await this.planService.findPlan(
+        subscription.scheduledPlanId,
+      );
+      if (scheduled && !scheduled.deleted) {
+        subscription.planId = scheduled.id;
+        // The new term is a different plan: the old term's discount and sold
+        // price describe nothing about it, and leaving them would report the
+        // member at the old plan's MRR for the whole new term.
+        subscription.planDurationId = null;
+        subscription.soldPrice = Number(scheduled.price);
+      }
+      subscription.scheduledPlanId = null;
+    }
+
     const period = renewalPeriod(subscription.endDate, days);
     subscription.endDate = period.endDate;
     subscription.state = SubscriptionState.ACTIVE;
@@ -339,6 +379,144 @@ export class subscriptionService {
     return isCurrentOn(subscription.endDate, toDateOnly(new Date()))
       ? subscription
       : null;
+  }
+
+  // Everything assessChange needs about the member's live term, and the row
+  // itself for the caller to act on. Looks at PAUSED and PENDING too, unlike
+  // findActiveForUser: a paused member asking to change plans must be told
+  // that their plan is paused ('not_current'), not that they have no plan.
+  async findChangeContext(
+    userId: number,
+  ): Promise<{ subscription: Subscription; current: CurrentTerm } | null> {
+    const live = await this.subscriptionRepository.findOne({
+      where: [
+        { userId, state: SubscriptionState.ACTIVE, deleted: false },
+        { userId, state: SubscriptionState.PAUSED, deleted: false },
+        { userId, state: SubscriptionState.PENDING, deleted: false },
+      ],
+      relations: { plan: true },
+      order: { id: 'DESC' },
+    });
+
+    if (!live) return null;
+
+    // Exactly one hop, never a walk — see Subscription.changedFromSubscriptionId.
+    let termStartDate: Date | string = live.startDate;
+    if (live.changedFromSubscriptionId != null) {
+      const origin = await this.subscriptionRepository.findOne({
+        where: { id: live.changedFromSubscriptionId },
+      });
+      if (origin) termStartDate = origin.startDate;
+    }
+
+    return {
+      subscription: live,
+      current: {
+        plan: live.plan,
+        state: live.state,
+        termStartDate,
+        endDate: live.endDate,
+        alreadyChanged: live.changedFromSubscriptionId != null,
+      },
+    };
+  }
+
+  /**
+   * The money-free half of a plan change: schedules a downgrade for the end of
+   * the term, or applies a lateral move on the spot.
+   *
+   * Refuses an upgrade outright. An upgrade is priced and must go through
+   * checkout — reaching this route with one would hand the member a dearer
+   * plan for free, which is the one failure mode this whole feature must not
+   * have.
+   */
+  async applyPlanChange(userId: number, planId: number) {
+    const plan = await this.planService.findPlan(planId);
+    if (!plan || plan.deleted) {
+      throw new NotFoundException(`El plan con ID: ${planId} no existe.`);
+    }
+
+    const context = await this.findChangeContext(userId);
+    const assessment = assessChange({
+      next: plan,
+      current: context?.current ?? null,
+      today: toDateOnly(new Date()),
+    });
+
+    if (!assessment.eligible) {
+      // Same instanceof guard as CheckoutService.getPlanChangeQuote: this is
+      // typed Date | string, and MySQL always hands back a string today, but
+      // toDateOnly itself only accepts a Date.
+      const termStartDate = context
+        ? context.current.termStartDate instanceof Date
+          ? toDateOnly(context.current.termStartDate)
+          : String(context.current.termStartDate).slice(0, 10)
+        : null;
+
+      throw new ConflictException(
+        blockMessage(assessment.reason, {
+          unlocksOn: termStartDate
+            ? addDays(termStartDate, PLAN_CHANGE_LOCK_DAYS)
+            : undefined,
+        }),
+      );
+    }
+
+    if (assessment.direction === 'upgrade') {
+      throw new ConflictException(
+        'Mejorar de plan tiene un costo. Completá el pago para aplicarlo.',
+      );
+    }
+
+    const live = context!.subscription;
+
+    if (assessment.direction === 'lateral') {
+      live.planId = planId;
+      live.scheduledPlanId = null;
+      // planDurationId still points at the OLD plan's PlanDuration row —
+      // stale the moment planId changes out from under it, since a
+      // PlanDuration belongs to exactly one plan. soldPrice must be rewritten
+      // to the new plan's regular monthly price in the same breath: this is
+      // the same pairing renew()'s scheduled-downgrade branch and
+      // confirmPlanCharge's prorated-upgrade branch both already follow —
+      // estimatedMrr divides soldPrice by planDuration?.months, falling back
+      // to 1 when planDurationId is null, so a null planDurationId paired
+      // with a leftover multi-month soldPrice total would overstate MRR by
+      // that many months (final review, Important finding — an earlier
+      // version of this fix left soldPrice alone, which was wrong).
+      live.planDurationId = null;
+      live.soldPrice = Number(plan.price);
+    } else {
+      live.scheduledPlanId = planId;
+    }
+
+    await this.subscriptionRepository.save(live);
+    return {
+      direction: assessment.direction,
+      effectiveFrom:
+        assessment.direction === 'lateral'
+          ? toDateOnly(new Date())
+          : addDays(
+              live.endDate instanceof Date
+                ? toDateOnly(live.endDate)
+                : String(live.endDate).slice(0, 10),
+              1,
+            ),
+      subscription: await this.findSubscription(live.id),
+    };
+  }
+
+  // Clears a scheduled downgrade set by applyPlanChange. The live term itself
+  // is untouched — this only cancels what would have happened at renewal.
+  async cancelScheduledPlanChange(userId: number) {
+    const context = await this.findChangeContext(userId);
+    if (!context || context.subscription.scheduledPlanId == null) {
+      throw new NotFoundException('No tenés un cambio de plan programado.');
+    }
+
+    context.subscription.scheduledPlanId = null;
+    await this.subscriptionRepository.save(context.subscription);
+    return this.findSubscription(context.subscription.id);
   }
 
   // Moves subscriptions that have run out to INACTIVE, nightly.

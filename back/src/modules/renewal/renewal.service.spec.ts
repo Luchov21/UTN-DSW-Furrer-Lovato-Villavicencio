@@ -8,7 +8,7 @@ import { PaymentState } from '../payment/enum/payment-state.enum';
 
 describe('RenewalService.chargeDueSubscriptions', () => {
   let config: { enabled: boolean };
-  let subscriptionService: { findDueForRenewal: jest.Mock };
+  let subscriptionService: { findDueForRenewal: jest.Mock; renew: jest.Mock };
   let savedCardService: { findActiveForUser: jest.Mock };
   let mercadoPagoClient: { chargeSavedCard: jest.Mock };
   let paymentService: {
@@ -19,6 +19,7 @@ describe('RenewalService.chargeDueSubscriptions', () => {
     sendPaymentReceipt: jest.Mock;
     sendRenewalFailure: jest.Mock;
   };
+  let planService: { findPlan: jest.Mock };
   let service: RenewalService;
 
   // Computed the same way the service computes it, so these tests stay valid
@@ -37,6 +38,8 @@ describe('RenewalService.chargeDueSubscriptions', () => {
     deleted: false,
     expirationMonth: 12,
     expirationYear: 2099,
+    paymentMethodId: 'master',
+    paymentTypeId: 'credit_card',
   };
 
   const buildSubscription = (overrides: Record<string, unknown> = {}) => ({
@@ -56,6 +59,7 @@ describe('RenewalService.chargeDueSubscriptions', () => {
       mercadoPagoClient as never,
       paymentService as never,
       mailService as never,
+      planService as never,
     );
   };
 
@@ -63,6 +67,7 @@ describe('RenewalService.chargeDueSubscriptions', () => {
     config = { enabled: true };
     subscriptionService = {
       findDueForRenewal: jest.fn().mockResolvedValue([]),
+      renew: jest.fn().mockResolvedValue(undefined),
     };
     savedCardService = {
       findActiveForUser: jest.fn().mockResolvedValue(chargeableCard),
@@ -83,6 +88,9 @@ describe('RenewalService.chargeDueSubscriptions', () => {
     mailService = {
       sendPaymentReceipt: jest.fn().mockResolvedValue(undefined),
       sendRenewalFailure: jest.fn().mockResolvedValue(undefined),
+    };
+    planService = {
+      findPlan: jest.fn().mockResolvedValue(null),
     };
   });
 
@@ -122,6 +130,62 @@ describe('RenewalService.chargeDueSubscriptions', () => {
         termMonths: 1,
         payMethod: 'mercadopago',
       }),
+    );
+  });
+
+  it("passes the saved card's method and type to chargeSavedCard", async () => {
+    const sub = buildSubscription();
+    subscriptionService.findDueForRenewal.mockResolvedValue([sub]);
+    savedCardService.findActiveForUser.mockResolvedValue({
+      mpCustomerId: 'cus_1',
+      mpCardId: 'card_1',
+      active: true,
+      deleted: false,
+      expirationMonth: 12,
+      expirationYear: 2099,
+      paymentMethodId: 'master',
+      paymentTypeId: 'credit_card',
+    });
+    mercadoPagoClient.chargeSavedCard.mockResolvedValue({
+      id: 'mp-1',
+      status: 'approved',
+    });
+    buildService();
+
+    await service.chargeDueSubscriptions();
+
+    expect(mercadoPagoClient.chargeSavedCard).toHaveBeenCalledWith(
+      expect.objectContaining({
+        paymentMethodId: 'master',
+        paymentTypeId: 'credit_card',
+      }),
+    );
+  });
+
+  it('persists mpOrderId when the renewal charge carries one', async () => {
+    const sub = buildSubscription();
+    subscriptionService.findDueForRenewal.mockResolvedValue([sub]);
+    savedCardService.findActiveForUser.mockResolvedValue({
+      mpCustomerId: 'cus_1',
+      mpCardId: 'card_1',
+      active: true,
+      deleted: false,
+      expirationMonth: 12,
+      expirationYear: 2099,
+      paymentMethodId: 'master',
+      paymentTypeId: 'credit_card',
+    });
+    mercadoPagoClient.chargeSavedCard.mockResolvedValue({
+      id: 'mp-1',
+      status: 'approved',
+      mpOrderId: 'ORD20',
+    });
+    buildService();
+
+    await service.chargeDueSubscriptions();
+
+    expect(paymentService.createFromMercadoPago).toHaveBeenCalledWith(
+      expect.objectContaining({ mpOrderId: 'ORD20' }),
     );
   });
 
@@ -295,5 +359,45 @@ describe('RenewalService.chargeDueSubscriptions', () => {
         method: 'mercadopago',
       }),
     );
+  });
+
+  // renew() applies a scheduled downgrade when the next term opens, so the
+  // cron must bill for the plan the member is actually about to be on, not
+  // the one they are leaving.
+  it('charges the scheduled plan price, not the current one', async () => {
+    const sub = buildSubscription({
+      scheduledPlanId: 1,
+      plan: { id: 2, price: 9000, numDays: 30, name: 'Premium' },
+    });
+    subscriptionService.findDueForRenewal.mockResolvedValue([sub]);
+    planService.findPlan.mockResolvedValue({
+      id: 1,
+      price: 6000,
+      numDays: 30,
+      name: 'Basic',
+    });
+    buildService();
+
+    await service.chargeDueSubscriptions();
+
+    expect(mercadoPagoClient.chargeSavedCard).toHaveBeenCalledWith(
+      expect.objectContaining({ amount: 6000 }),
+    );
+  });
+
+  it('leaves the scheduled change pending when the charge is declined', async () => {
+    // A decline leaves the subscription exactly as it was, scheduled change
+    // included: the next attempt must still know about it.
+    const sub = buildSubscription({ scheduledPlanId: 1 });
+    subscriptionService.findDueForRenewal.mockResolvedValue([sub]);
+    mercadoPagoClient.chargeSavedCard.mockResolvedValue({
+      status: 'rejected',
+      id: 'mp-x',
+    });
+    buildService();
+
+    await service.chargeDueSubscriptions();
+
+    expect(subscriptionService.renew).not.toHaveBeenCalled();
   });
 });

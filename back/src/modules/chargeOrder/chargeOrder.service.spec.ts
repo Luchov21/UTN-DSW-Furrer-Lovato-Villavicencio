@@ -1,8 +1,10 @@
 import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { ConflictException, NotFoundException } from '@nestjs/common';
+import { FindOperator } from 'typeorm';
 import { ChargeOrderService } from './chargeOrder.service';
 import { ChargeOrder } from './entity/chargeOrder.entity';
+import { ChargeOrderMethod } from './enum/chargeOrder-method.enum';
 import { ChargeOrderStatus } from './enum/chargeOrder-status.enum';
 import { subscriptionService } from '../subscription/subscription.service';
 import { SubscriptionState } from '../subscription/enum/subscription-state.enum';
@@ -368,6 +370,155 @@ describe('ChargeOrderService.createCharge', () => {
       expect.objectContaining({ status: ChargeOrderStatus.PENDING }),
     );
   });
+
+  it('skips the busy-point check for an online order', async () => {
+    await buildService();
+
+    await service.createCharge({
+      ...params,
+      method: 'online',
+      collectionPointId: null,
+      adminId: null,
+    });
+
+    expect(manager.createQueryBuilder).not.toHaveBeenCalled();
+  });
+
+  it('still enforces the busy-point check for a point order', async () => {
+    await buildService();
+    queryBuilder.getOne.mockResolvedValue({ id: 99 });
+
+    await expect(service.createCharge(params)).rejects.toBeInstanceOf(
+      ConflictException,
+    );
+    expect(manager.createQueryBuilder).toHaveBeenCalled();
+  });
+
+  it('refuses an online order that carries a collection point', async () => {
+    // The pairing the busy-point lock rests on: 'online' is the only method
+    // that skips the lock, so an 'online' order holding a real caja id would
+    // arm a second live charge on a shared physical QR with nothing guarding
+    // it. CreateChargeOrderDto refuses this at the front-desk endpoint; this
+    // is the service's own backstop.
+    await buildService();
+
+    await expect(
+      service.createCharge({
+        ...params,
+        method: 'online',
+        collectionPointId: 'caja-5',
+        adminId: null,
+      }),
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(repository.manager.transaction).not.toHaveBeenCalled();
+  });
+
+  it.each(['point', 'qr'] as const)(
+    'refuses a %s order with no collection point',
+    async (method) => {
+      // The mirror image: a front-desk order with a null caja id would take
+      // the lock on a null key, serialising (or silently skipping) the one
+      // check that keeps two members off the same terminal.
+      await buildService();
+
+      await expect(
+        service.createCharge({ ...params, method, collectionPointId: null }),
+      ).rejects.toBeInstanceOf(ConflictException);
+      expect(repository.manager.transaction).not.toHaveBeenCalled();
+    },
+  );
+
+  it('stores an online order with no collection point and no admin', async () => {
+    await buildService();
+
+    await service.createCharge({
+      ...params,
+      method: 'online',
+      collectionPointId: null,
+      adminId: null,
+    });
+
+    expect(manager.create).toHaveBeenCalledWith(
+      ChargeOrder,
+      expect.objectContaining({
+        method: 'online',
+        collectionPointId: null,
+        createdById: null,
+        status: ChargeOrderStatus.PENDING,
+      }),
+    );
+  });
+
+  it('uses a caller-supplied external reference when given one', async () => {
+    await buildService();
+
+    const saved = await service.createCharge({
+      userId: 7,
+      planId: 12,
+      months: 1,
+      amount: 19995,
+      method: 'online',
+      collectionPointId: null,
+      adminId: null,
+      externalReference: 'flg-user-7-a1b2c3d4',
+    });
+
+    expect(saved.externalReference).toBe('flg-user-7-a1b2c3d4');
+  });
+
+  it('still mints one when the caller supplies none', async () => {
+    await buildService();
+
+    const saved = await service.createCharge({
+      userId: 7,
+      planId: 12,
+      months: 1,
+      amount: 19995,
+      method: 'online',
+      collectionPointId: null,
+      adminId: null,
+    });
+
+    expect(saved.externalReference).toMatch(/^flg-user-7-[a-f0-9]{8}$/);
+  });
+
+  // Load-bearing regression guard, carried forward from Task 6's review:
+  // resolveTerm(plan, months, durations) throws NotFoundException for any
+  // months value with no matching PlanDuration, and no plan has a 0-month
+  // duration. A prorated plan-change charge arrives here with months: 0 (the
+  // ResolvedCharge.termMonths convention — a proration buys no term), so
+  // without a branch this would throw one layer below where checkout.service
+  // already resolves the correct amount.
+  it('does not throw for a prorated plan-change charge (months: 0)', async () => {
+    await buildService();
+
+    const saved = await service.createCharge({
+      ...params,
+      months: 0,
+      changeFromSubscriptionId: 10,
+    });
+
+    expect(manager.create).toHaveBeenCalledWith(
+      ChargeOrder,
+      expect.objectContaining({
+        termMonths: 0,
+        planDurationId: null,
+        changeFromSubscriptionId: 10,
+      }),
+    );
+    expect(saved).toBeDefined();
+  });
+
+  it('records changeFromSubscriptionId as null for an ordinary term purchase', async () => {
+    await buildService();
+
+    await service.createCharge(params);
+
+    expect(manager.create).toHaveBeenCalledWith(
+      ChargeOrder,
+      expect.objectContaining({ changeFromSubscriptionId: null }),
+    );
+  });
 });
 
 describe('ChargeOrderService.findByExternalReference', () => {
@@ -679,5 +830,20 @@ describe('ChargeOrderService.expireStale', () => {
       expect.objectContaining({ status: ChargeOrderStatus.PENDING }),
       expect.objectContaining({ status: ChargeOrderStatus.EXPIRED }),
     );
+  });
+
+  it('never sweeps an online order', async () => {
+    // An online checkout left in_process keeps its order PENDING on purpose,
+    // so ChargeOrderResolverAdapter can still resolve it when Mercado Pago's
+    // webhook reports the outcome. Any front-desk charge running this sweep
+    // must not expire that row out from under the recovery.
+    await service.expireStale();
+
+    const [criteria] = repository.update.mock.calls[0] as [
+      { method?: FindOperator<string> },
+    ];
+    expect(criteria.method).toBeInstanceOf(FindOperator);
+    expect(criteria.method?.type).toBe('not');
+    expect(criteria.method?.value).toBe(ChargeOrderMethod.ONLINE);
   });
 });

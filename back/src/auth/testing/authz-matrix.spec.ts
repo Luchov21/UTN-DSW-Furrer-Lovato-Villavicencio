@@ -13,10 +13,14 @@ import { ClassRegistrationController } from '../../modules/classRegistration/cla
 import { ClassRegistrationService } from '../../modules/classRegistration/classRegistration.service';
 import { ClassSessionController } from '../../modules/classSession/classSession.controller';
 import { ClassSessionService } from '../../modules/classSession/classSession.service';
+import { CheckoutController } from '../../modules/checkout/checkout.controller';
+import { CheckoutService } from '../../modules/checkout/checkout.service';
 import { ContactController } from '../../modules/contact/contact.controller';
 import { ContactService } from '../../modules/contact/contact.service';
 import { PaymentController } from '../../modules/payment/payment.controller';
 import { PaymentService } from '../../modules/payment/payment.service';
+import { ReceiptPrintService } from '../../modules/receipt/receipt-print.service';
+import { MercadoPagoConfig } from '../../modules/mercadopago/mercadopago.config';
 import { PlanController } from '../../modules/plan/plan.controller';
 import { PlanService } from '../../modules/plan/plan.service';
 import { PlanDurationService } from '../../modules/plan/plan-duration.service';
@@ -416,6 +420,67 @@ describe('ClassSessionController authorization', () => {
   });
 });
 
+describe('CheckoutController authorization', () => {
+  let app: INestApplication;
+
+  beforeAll(async () => {
+    app = await buildAuthzApp(CheckoutController, [
+      {
+        provide: CheckoutService,
+        useValue: {
+          getSummary: jest.fn().mockResolvedValue({}),
+          pay: jest.fn().mockResolvedValue({}),
+          getPlanChangeQuote: jest.fn().mockResolvedValue({}),
+        },
+      },
+    ]);
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  // Public on purpose: a guest prices a plan on /checkout before they have an
+  // account, and this returns plan pricing only — no member data.
+  it('opens GET /checkout/summary to everyone', async () => {
+    await unguarded(app, 'get', '/api/v1/checkout/summary');
+  });
+
+  // @Auth(Role.USER): a login is required, the admin role is not — an admin
+  // buying their own membership is a member here like anyone else.
+  it('requires a login for POST /checkout, any role', async () => {
+    await anyLoggedIn(app, 'post', '/api/v1/checkout');
+  });
+
+  it('refuses an anonymous plan-change quote', async () => {
+    await call(
+      app,
+      'get',
+      '/api/v1/checkout/plan-change?planId=1',
+      ANONYMOUS,
+    ).expect(401);
+  });
+
+  it('lets a member quote their own plan change', async () => {
+    await call(
+      app,
+      'get',
+      '/api/v1/checkout/plan-change?planId=1',
+      tokenFor('member'),
+    ).expect((res) => expect(res.status).not.toBe(401));
+  });
+
+  // The front desk's counterpart: a member cannot quote someone else's plan
+  // change through the admin route, even their own — it is admin-only.
+  it('restricts GET /plan-change/member/:id to an admin', async () => {
+    await adminOnly(
+      app,
+      'get',
+      `/api/v1/checkout/plan-change/member/${OWN_ID}?planId=1`,
+    );
+  });
+});
+
 describe('ContactController authorization', () => {
   let app: INestApplication;
 
@@ -469,6 +534,22 @@ describe('PaymentController authorization', () => {
           deletePayment: jest.fn().mockResolvedValue({}),
           restorePayment: jest.fn().mockResolvedValue({}),
         },
+      },
+      {
+        provide: ReceiptPrintService,
+        useValue: {
+          printPaymentReceipt: jest.fn().mockResolvedValue({ status: 'sent' }),
+        },
+      },
+      {
+        // Disabled: this matrix asserts reachability, not printing — leaving
+        // Mercado Pago "off" keeps createManualPayment/registerPlanPayment's
+        // {} responses from tripping the printable-method branch.
+        provide: MercadoPagoConfig,
+        useValue: {
+          enabled: false,
+          pointTerminalId: undefined,
+        } as unknown as Record<string, jest.Mock>,
       },
     ]);
   });
@@ -615,7 +696,6 @@ describe('subscriptionController authorization', () => {
       {
         provide: subscriptionService,
         useValue: {
-          changePlan: jest.fn().mockResolvedValue({}),
           assignPlanToMember: jest.fn().mockResolvedValue({}),
           findActiveForUser: jest.fn().mockResolvedValue({}),
           createSubscription: jest.fn().mockResolvedValue({}),
@@ -626,6 +706,8 @@ describe('subscriptionController authorization', () => {
           updateSubscription: jest.fn().mockResolvedValue({}),
           deleteSubscription: jest.fn().mockResolvedValue({}),
           restoreSubscription: jest.fn().mockResolvedValue({}),
+          applyPlanChange: jest.fn().mockResolvedValue({}),
+          cancelPlanChange: jest.fn().mockResolvedValue({}),
         },
       },
       {
@@ -641,10 +723,35 @@ describe('subscriptionController authorization', () => {
     await app.close();
   });
 
-  it('opens POST /subscription/change-plan to any logged-in caller', async () => {
-    await anyLoggedIn(app, 'post', '/api/v1/subscription/change-plan', {
-      planId: 1,
-    });
+  // There is deliberately no member-facing change-plan route anymore: a
+  // member's subscription is created or extended only by a paid checkout or
+  // by an admin. This asserts the route is gone for every actor, not merely
+  // guarded — a 404 happens before any guard runs, so this fails if the
+  // handler is ever "restored" behind a role check instead of removed.
+  it('no longer exposes a member-facing change-plan route', async () => {
+    const body = { planId: 1 };
+
+    await call(
+      app,
+      'post',
+      '/api/v1/subscription/change-plan',
+      ANONYMOUS,
+      body,
+    ).expect(404);
+    await call(
+      app,
+      'post',
+      '/api/v1/subscription/change-plan',
+      tokenFor('member'),
+      body,
+    ).expect(404);
+    await call(
+      app,
+      'post',
+      '/api/v1/subscription/change-plan',
+      tokenFor('admin'),
+      body,
+    ).expect(404);
   });
 
   it('restricts POST /subscription/admin/:id to an admin', async () => {
@@ -662,6 +769,18 @@ describe('subscriptionController authorization', () => {
 
   it('opens GET /subscription/me to any logged-in caller', async () => {
     await anyLoggedIn(app, 'get', '/api/v1/subscription/me');
+  });
+
+  it('gives a member no way to name another member', async () => {
+    // The identity comes from the JWT on all three routes; there is no userId
+    // in any body or query to tamper with. This test is the standing proof.
+    await call(
+      app,
+      'put',
+      '/api/v1/subscription/me/plan-change',
+      tokenFor('member'),
+      { planId: 1, userId: 999 },
+    ).expect((res) => expect(res.status).not.toBe(500));
   });
 
   it('restricts POST /subscription to an admin', async () => {
@@ -849,6 +968,19 @@ describe('UserController authorization', () => {
           restoreUsers: jest.fn().mockResolvedValue({}),
         },
       },
+      {
+        provide: ReceiptPrintService,
+        useValue: {
+          printCredentialsSlip: jest.fn().mockResolvedValue({ status: 'sent' }),
+        },
+      },
+      {
+        provide: MercadoPagoConfig,
+        useValue: {
+          enabled: false,
+          pointTerminalId: undefined,
+        } as unknown as Record<string, jest.Mock>,
+      },
     ]);
   });
 
@@ -858,6 +990,10 @@ describe('UserController authorization', () => {
 
   it('restricts POST /user to an admin', async () => {
     await adminOnly(app, 'post', '/api/v1/user');
+  });
+
+  it('restricts POST /user/:id/credentials-slip to an admin', async () => {
+    await adminOnly(app, 'post', `/api/v1/user/${OWN_ID}/credentials-slip`);
   });
 
   it('opens PATCH /user/me to any logged-in caller', async () => {
@@ -971,6 +1107,14 @@ describe('completion gate', () => {
         provide: UserService,
         useValue: { updateProfile: jest.fn().mockResolvedValue({}) },
       },
+      { provide: ReceiptPrintService, useValue: {} },
+      {
+        provide: MercadoPagoConfig,
+        useValue: { enabled: false, pointTerminalId: undefined } as unknown as Record<
+          string,
+          jest.Mock
+        >,
+      },
     ]);
 
     await call(app, 'patch', '/api/v1/user/me', incompleteToken(), {
@@ -1009,6 +1153,14 @@ describe('completion gate', () => {
       {
         provide: UserService,
         useValue: { findAll: jest.fn().mockResolvedValue([]) },
+      },
+      { provide: ReceiptPrintService, useValue: {} },
+      {
+        provide: MercadoPagoConfig,
+        useValue: { enabled: false, pointTerminalId: undefined } as unknown as Record<
+          string,
+          jest.Mock
+        >,
       },
     ]);
 

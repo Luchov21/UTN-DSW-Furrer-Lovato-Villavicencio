@@ -2,19 +2,38 @@ import { Check, X, Loader2 } from 'lucide-react';
 import Card from '../common/Card';
 import Button from '../common/Button';
 import { classAllowanceLabel, type MembershipPlan } from './plans.data';
+import { formatPriceDisplay } from '../../lib/currency';
+import { formatDateOnly } from '../../lib/date';
+import type { PlanChangeQuote } from '../../types/plan-change';
 
 interface PlanCardProps {
   plan: MembershipPlan;
   onSelect?: (plan: MembershipPlan) => void;
   isLoading?: boolean;
   isCurrentSubscription?: boolean;
+  quote?: PlanChangeQuote;
 }
+
+// What the member reads under the price when a quote for this plan is
+// available. Ineligible quotes surface the backend's own reason instead of a
+// generic message — it is the difference between "why can't I" and silence.
+const changeLabel = (quote: PlanChangeQuote): string => {
+  if (!quote.eligible) return quote.message ?? '';
+  if (quote.direction === 'upgrade') {
+    return `Mejorá por $${formatPriceDisplay(quote.amount)} — mantenés el vencimiento del ${formatDateOnly(quote.effectiveEndDate!)}`;
+  }
+  if (quote.direction === 'downgrade') {
+    return `Cambiá sin costo a partir del ${formatDateOnly(quote.effectiveEndDate!)}`;
+  }
+  return 'Cambiá sin costo ahora';
+};
 
 const PlanCard = ({
   plan,
   onSelect,
   isLoading = false,
   isCurrentSubscription = false,
+  quote,
 }: PlanCardProps) => {
   return (
     <Card
@@ -43,6 +62,14 @@ const PlanCard = ({
           <span className="pb-1 text-base text-text-muted">{plan.period}</span>
         </div>
 
+        {quote && (
+          <p
+            className={`text-sm ${quote.eligible ? 'text-primary' : 'text-text-muted'}`}
+          >
+            {changeLabel(quote)}
+          </p>
+        )}
+
         <p className="text-xs font-semibold uppercase tracking-wide text-primary">
           {classAllowanceLabel(plan.maxClasses)}
         </p>
@@ -68,7 +95,11 @@ const PlanCard = ({
 
       <Button
         onClick={() => onSelect?.(plan)}
-        disabled={isLoading || isCurrentSubscription}
+        disabled={
+          isLoading ||
+          isCurrentSubscription ||
+          (quote ? !quote.eligible : false)
+        }
         variant={plan.highlight ? 'primary' : 'secondary'}
         className="w-full"
       >

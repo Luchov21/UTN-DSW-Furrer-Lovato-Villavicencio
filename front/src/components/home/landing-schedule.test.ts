@@ -3,6 +3,7 @@ import {
   enrichSessions,
   nextSessionFrom,
   sessionsForWeekday,
+  spotsTone,
 } from './landing-schedule';
 import type { Class } from '../../types/class';
 import type { ClassSession } from '../../types/classSession';
@@ -147,5 +148,27 @@ describe('nextSessionFrom', () => {
 
   it('returns null when there are no sessions at all', () => {
     expect(nextSessionFrom([], mondayAt(10, 0))).toBeNull();
+  });
+});
+
+describe('spotsTone', () => {
+  it('reports a full session', () => {
+    expect(spotsTone(0)).toBe('full');
+  });
+
+  it('warns when three or fewer places are left', () => {
+    expect(spotsTone(1)).toBe('low');
+    expect(spotsTone(3)).toBe('low');
+  });
+
+  it('is calm when there is room', () => {
+    expect(spotsTone(4)).toBe('ok');
+    expect(spotsTone(20)).toBe('ok');
+  });
+
+  it('says nothing when the API did not send a count', () => {
+    // availableSpots is optional on ClassSession; a missing count must not be
+    // rendered as "0 lugares", which would read as full.
+    expect(spotsTone(null)).toBe('unknown');
   });
 });

@@ -71,3 +71,15 @@ export const nextSessionFrom = (
 
   return null;
 };
+
+export type SpotsTone = 'full' | 'low' | 'ok' | 'unknown';
+
+// availableSpots is optional on ClassSession. A missing count is 'unknown' and
+// renders nothing — collapsing it into 0 would tell a visitor the class is full
+// when the truth is that we do not know.
+export const spotsTone = (availableSpots: number | null): SpotsTone => {
+  if (availableSpots === null) return 'unknown';
+  if (availableSpots <= 0) return 'full';
+  if (availableSpots <= 3) return 'low';
+  return 'ok';
+};

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import {
   Dumbbell,
   Menu,
@@ -11,6 +11,7 @@ import {
 import Container from '../common/Container';
 import Button from '../common/Button';
 import { useAuth } from '../../context/useAuth';
+import { LANDING_ANCHORS } from '../home/landing.data';
 
 interface NavLink {
   label: string;
@@ -25,6 +26,18 @@ const publicLinks: NavLink[] = [
   { label: 'Planes', href: '/membership' },
   { label: 'Sobre nosotros', href: '/about' },
   { label: 'Contacto', href: '/contact' },
+];
+
+// On the landing page the same labels scroll to sections rather than
+// navigating. They are not used on any other route, where the ids do not
+// exist and every one of them would be a dead link.
+const landingLinks: NavLink[] = [
+  { label: 'Instalaciones', href: `#${LANDING_ANCHORS.facilities}` },
+  { label: 'Clases', href: `#${LANDING_ANCHORS.disciplines}` },
+  { label: 'Horarios', href: `#${LANDING_ANCHORS.schedule}` },
+  { label: 'Entrenadores', href: `#${LANDING_ANCHORS.coaches}` },
+  { label: 'Planes', href: `#${LANDING_ANCHORS.plans}` },
+  { label: 'Cómo llegar', href: `#${LANDING_ANCHORS.location}` },
 ];
 
 // Navigation for a signed-in member.
@@ -51,10 +64,13 @@ const Navbar = () => {
   const [isOpen, setIsOpen] = useState(false);
   const { user, isAuthenticated, isAdmin, logout } = useAuth();
   const navigate = useNavigate();
+  const { pathname } = useLocation();
+  const isLanding = pathname === '/';
 
-  // Which set of links to render depends on the role.
   let navLinks = publicLinks;
-  if (isAdmin) {
+  if (isLanding) {
+    navLinks = landingLinks;
+  } else if (isAdmin) {
     navLinks = adminLinks;
   } else if (isAuthenticated) {
     navLinks = userLinks;
@@ -78,15 +94,27 @@ const Navbar = () => {
         {/* Links desktop */}
 
         <nav className="hidden items-center gap-8 lg:flex">
-          {navLinks.map((link) => (
-            <Link
-              key={link.label}
-              to={link.href}
-              className="font-body text-md text-text-muted transition-colors duration-200 hover:text-primary"
-            >
-              {link.label}
-            </Link>
-          ))}
+          {navLinks.map((link) =>
+            link.href.startsWith('#') ? (
+              <a
+                key={link.label}
+                href={link.href}
+                onClick={() => setIsOpen(false)}
+                className="font-body text-md text-text-muted transition-colors duration-200 hover:text-primary"
+              >
+                {link.label}
+              </a>
+            ) : (
+              <Link
+                key={link.label}
+                to={link.href}
+                onClick={() => setIsOpen(false)}
+                className="font-body text-md text-text-muted transition-colors duration-200 hover:text-primary"
+              >
+                {link.label}
+              </Link>
+            ),
+          )}
 
           {/* NAVBAR ADMIN */}
           {isAdmin && (
@@ -122,23 +150,23 @@ const Navbar = () => {
               </Button>
             </div>
           ) : (
-            <Button href="/login" size="sm">
-              Ingresar
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                fill="none"
-                viewBox="0 0 24 24"
-                strokeWidth="2"
-                stroke="currentColor"
-                className="h-4 w-4 ml-1 "
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3"
-                />
-              </svg>
-            </Button>
+            <div className="flex items-center gap-3">
+              <Button href="/login" variant="secondary" size="sm">
+                Mi cuenta
+              </Button>
+              {isLanding ? (
+                <a
+                  href={`#${LANDING_ANCHORS.freePass}`}
+                  className="inline-flex items-center justify-center rounded-full bg-primary px-4 py-2 font-body text-sm font-semibold text-background shadow-md transition-all duration-300 hover:bg-primary-hover hover:shadow-xl"
+                >
+                  Pase gratis
+                </a>
+              ) : (
+                <Button href="/register" size="sm">
+                  Sumate
+                </Button>
+              )}
+            </div>
           )}
         </div>
 
@@ -161,16 +189,27 @@ const Navbar = () => {
       {isOpen && ( // && is conditional rendering. If isOpen = true, it displays; if isOpen = false, it displays nothing.
         <div className="border-t border-border bg-background lg:hidden">
           <Container className="flex flex-col gap-4 py-6">
-            {navLinks.map((link) => (
-              <Link
-                key={link.label}
-                to={link.href}
-                onClick={() => setIsOpen(false)} // Set to false so that it closes when you click on a link
-                className="font-body text-base text-text-muted transition-colors duration-200 hover:text-primary"
-              >
-                {link.label}
-              </Link>
-            ))}
+            {navLinks.map((link) =>
+              link.href.startsWith('#') ? (
+                <a
+                  key={link.label}
+                  href={link.href}
+                  onClick={() => setIsOpen(false)}
+                  className="font-body text-md text-text-muted transition-colors duration-200 hover:text-primary"
+                >
+                  {link.label}
+                </a>
+              ) : (
+                <Link
+                  key={link.label}
+                  to={link.href}
+                  onClick={() => setIsOpen(false)}
+                  className="font-body text-md text-text-muted transition-colors duration-200 hover:text-primary"
+                >
+                  {link.label}
+                </Link>
+              ),
+            )}
 
             {isAdmin && (
               <Link
@@ -203,9 +242,29 @@ const Navbar = () => {
                 </Button>
               </div>
             ) : (
-              <Button href="/login" size="sm" className="mt-2 w-full">
-                Ingresar
-              </Button>
+              <div className="flex flex-col gap-2 pt-2">
+                <Button
+                  href="/login"
+                  variant="secondary"
+                  size="sm"
+                  className="w-full"
+                >
+                  Mi cuenta
+                </Button>
+                {isLanding ? (
+                  <a
+                    href={`#${LANDING_ANCHORS.freePass}`}
+                    onClick={() => setIsOpen(false)}
+                    className="inline-flex w-full items-center justify-center rounded-full bg-primary px-4 py-2 font-body text-sm font-semibold text-background shadow-md transition-all duration-300 hover:bg-primary-hover hover:shadow-xl"
+                  >
+                    Pase gratis
+                  </a>
+                ) : (
+                  <Button href="/register" size="sm" className="w-full">
+                    Sumate
+                  </Button>
+                )}
+              </div>
             )}
           </Container>
         </div>

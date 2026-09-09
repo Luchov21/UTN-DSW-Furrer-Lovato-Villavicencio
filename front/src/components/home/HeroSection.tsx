@@ -11,18 +11,40 @@ interface HeroSectionProps {
   classes: Class[];
   trainers: Trainer[];
   errors: LandingErrors;
+  isLoading: boolean;
 }
 
-const HeroSection = ({ classes, trainers, errors }: HeroSectionProps) => {
+const HeroSection = ({
+  classes,
+  trainers,
+  errors,
+  isLoading,
+}: HeroSectionProps) => {
   const counts = heroCounts(classes, trainers, errors);
 
-  // A count is omitted rather than shown as zero when its request failed, so an
-  // outage never advertises "0 disciplinas". See landing-highlights.ts.
+  // While the data is still loading, classes/trainers are empty arrays and
+  // errors are all null, which heroCounts cannot tell apart from "the gym
+  // really has zero". Facts are omitted (not shown as zero) until loading
+  // finishes. A count is also omitted rather than shown as zero when its
+  // request failed, so an outage never advertises "0 disciplinas". See
+  // landing-highlights.ts.
   const facts = [
-    counts.disciplines !== null ? `${counts.disciplines} disciplinas` : null,
-    counts.trainers !== null ? `${counts.trainers} profesores` : null,
+    !isLoading && counts.disciplines !== null
+      ? `${counts.disciplines} disciplinas`
+      : null,
+    !isLoading && counts.trainers !== null
+      ? `${counts.trainers} profesores`
+      : null,
     'Lun a vie 06–23 hs',
   ].filter((fact): fact is string => fact !== null);
+
+  // CSS media queries cannot stop autoPlay/loop, so the reduced-motion guard
+  // for the hero video needs a JS check. Recomputed on every render is fine:
+  // this is a cheap read and the component is not expected to react to the
+  // preference changing mid-session.
+  const prefersReducedMotion =
+    typeof window !== 'undefined' &&
+    window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
   return (
     <section
@@ -50,9 +72,9 @@ const HeroSection = ({ classes, trainers, errors }: HeroSectionProps) => {
             <video
               src="/videos/hero-video3.mp4"
               poster="/images/hero-imagen.avif"
-              autoPlay
+              autoPlay={!prefersReducedMotion}
               muted
-              loop
+              loop={!prefersReducedMotion}
               playsInline
               preload="none"
               aria-hidden="true"

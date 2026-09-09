@@ -157,13 +157,15 @@ const ScheduleSection = ({
               })}
             </div>
 
-            {focusedName && (
+            {focusedClassId !== null && (
               <button
                 type="button"
                 onClick={onClearFocus}
                 className="mt-4 inline-flex items-center gap-2 rounded-full border border-primary/40 bg-primary/10 px-3 py-1.5 font-body text-xs text-primary transition-colors hover:bg-primary/20 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
               >
-                Filtrando por {focusedName}
+                {focusedName
+                  ? `Filtrando por ${focusedName}`
+                  : 'Filtrando por una clase'}
                 <X className="h-3.5 w-3.5" aria-hidden="true" />
                 <span className="sr-only">Quitar el filtro</span>
               </button>

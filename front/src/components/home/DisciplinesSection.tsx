@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import Button from '../common/Button';
 import Container from '../common/Container';
+import FormAlert from '../common/FormAlert';
 import SectionTitle from '../common/SectionTitle';
 import DisciplineCard from './DisciplineCard';
 import LandingSectionShell from './LandingSectionShell';
@@ -88,28 +89,34 @@ const DisciplinesSection = ({
             </div>
           }
         >
-          {typeClasses.length > 0 && (
-            <div className="mt-10 flex flex-wrap justify-center gap-2">
-              <button
-                type="button"
-                onClick={() => setActiveType(ALL)}
-                className={chipClasses(activeType === ALL)}
-              >
-                Todas
-              </button>
-              {typeClasses.map((type) => (
-                <button
-                  key={type.id}
-                  type="button"
-                  onClick={() =>
-                    type.id !== undefined && setActiveType(type.id)
-                  }
-                  className={chipClasses(activeType === type.id)}
-                >
-                  {type.name}
-                </button>
-              ))}
+          {errors.typeClasses ? (
+            <div className="mx-auto mt-10 max-w-md">
+              <FormAlert type="error" message={errors.typeClasses} />
             </div>
+          ) : (
+            typeClasses.length > 0 && (
+              <div className="mt-10 flex flex-wrap justify-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setActiveType(ALL)}
+                  className={chipClasses(activeType === ALL)}
+                >
+                  Todas
+                </button>
+                {typeClasses.map((type) => (
+                  <button
+                    key={type.id}
+                    type="button"
+                    onClick={() =>
+                      type.id !== undefined && setActiveType(type.id)
+                    }
+                    className={chipClasses(activeType === type.id)}
+                  >
+                    {type.name}
+                  </button>
+                ))}
+              </div>
+            )
           )}
 
           {featured.length === 0 ? (

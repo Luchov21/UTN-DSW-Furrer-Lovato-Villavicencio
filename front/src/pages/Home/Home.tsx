@@ -39,7 +39,12 @@ function Home() {
       <Navbar />
 
       <main className="flex-1">
-        <HeroSection classes={classes} trainers={trainers} errors={errors} />
+        <HeroSection
+          classes={classes}
+          trainers={trainers}
+          errors={errors}
+          isLoading={isLoading}
+        />
         <ValuePropsTicker />
         <LeadMagnetSection />
         <DisciplinesSection

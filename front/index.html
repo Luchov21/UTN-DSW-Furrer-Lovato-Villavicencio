@@ -4,7 +4,72 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>FLG - Fitness &amp; Gym</title>
+
+    <title>FLG · Gimnasio en Rosario — Musculación, clases y planes</title>
+    <meta
+      name="description"
+      content="Gimnasio en Zeballos 1341, Rosario. Musculación, cardio y clases guiadas de lunes a sábado, con planes sin permanencia y pase gratis de 1 día."
+    />
+    <link rel="canonical" href="https://flg.com.ar/" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="FLG" />
+    <meta
+      property="og:title"
+      content="FLG · Gimnasio en Rosario — Musculación, clases y planes"
+    />
+    <meta
+      property="og:description"
+      content="Musculación, cardio y clases guiadas de lunes a sábado. Planes sin permanencia y pase gratis de 1 día."
+    />
+    <meta property="og:image" content="/images/hero-imagen.avif" />
+    <meta name="twitter:card" content="summary_large_image" />
+
+    <!-- The hero's poster is the LCP candidate; preloading it here starts the
+         fetch before the bundle parses. The <video> itself is preload="none". -->
+    <link
+      rel="preload"
+      as="image"
+      href="/images/hero-imagen.avif"
+      fetchpriority="high"
+    />
+
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "ExerciseGym",
+        "name": "FLG",
+        "url": "https://flg.com.ar/",
+        "telephone": "+54 9 341 272-4611",
+        "address": {
+          "@type": "PostalAddress",
+          "streetAddress": "Zeballos 1341",
+          "addressLocality": "Rosario",
+          "addressRegion": "Santa Fe",
+          "addressCountry": "AR"
+        },
+        "openingHoursSpecification": [
+          {
+            "@type": "OpeningHoursSpecification",
+            "dayOfWeek": [
+              "Monday",
+              "Tuesday",
+              "Wednesday",
+              "Thursday",
+              "Friday"
+            ],
+            "opens": "06:00",
+            "closes": "23:00"
+          },
+          {
+            "@type": "OpeningHoursSpecification",
+            "dayOfWeek": "Saturday",
+            "opens": "08:00",
+            "closes": "20:00"
+          }
+        ]
+      }
+    </script>
   </head>
   <body>
     <div id="root"></div>

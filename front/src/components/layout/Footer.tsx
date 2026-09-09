@@ -4,17 +4,19 @@ import Container from '../common/Container';
 
 const footerLinks = {
   class: [
-    { label: 'Entrenamiento Fuerza', href: '/class' },
-    { label: 'HIIT', href: '/class' },
-    { label: 'Yoga & Wellness', href: '/class' },
-    { label: 'Spinning', href: '/class' },
+    { label: 'Clases y actividades', href: '/class' },
+    { label: 'Entrenadores', href: '/trainers' },
+    { label: 'Planes y precios', href: '/membership' },
   ],
   company: [
     { label: 'Sobre nosotros', href: '/about' },
-    { label: 'Clases', href: '/class' },
-    { label: 'Entrenadores', href: '/trainers' },
-    { label: 'Planes', href: '/plan' },
     { label: 'Contacto', href: '/contact' },
+    { label: 'Ingresar a mi cuenta', href: '/login' },
+  ],
+  legal: [
+    { label: 'Términos y condiciones', href: '/terms' },
+    { label: 'Política de privacidad', href: '/privacy' },
+    { label: 'Reglamento de uso', href: '/rules' },
   ],
 };
 
@@ -24,7 +26,7 @@ const Footer = () => {
   return (
     <footer className="border-t border-border bg-bg-terciary">
       <Container className="py-16">
-        <div className="grid grid-cols-1 gap-10 sm:grid-cols-3">
+        <div className="grid grid-cols-1 gap-10 sm:grid-cols-2 lg:grid-cols-4">
           {/* Logo + tagline */}
           <div>
             <Link to="/" className="flex items-center gap-2">
@@ -78,10 +80,32 @@ const Footer = () => {
               ))}
             </ul>
           </div>
+
+          {/* Columna Legales */}
+          <div>
+            <h4 className="font-display text-sm font-semibold text-text">
+              Legales
+            </h4>
+            <ul className="mt-4 flex flex-col gap-3">
+              {footerLinks.legal.map((link) => (
+                <li key={link.label}>
+                  <Link
+                    to={link.href}
+                    className="font-body text-sm text-text-muted transition-colors duration-200 hover:text-primary"
+                  >
+                    {link.label}
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </div>
         </div>
 
         {/* Copyright */}
         <div className="mt-12 border-t border-border pt-6 text-center">
+          <p className="mb-3 font-body text-xs text-text-muted">
+            Aceptamos Mercado Pago, tarjetas de crédito y débito.
+          </p>
           <p className="font-body text-sm text-text-muted">
             © {currentYear} FLG. Todos los derechos reservados.
           </p>

@@ -1,102 +1,119 @@
-import Badge from '../common/badge/Badge';
+import { MapPin } from 'lucide-react';
 import Button from '../common/Button';
 import Container from '../common/Container';
-import { CheckCircle, Trophy } from 'lucide-react';
+import { heroCounts } from './landing-highlights';
+import { GYM_LOCATION, LANDING_ANCHORS } from './landing.data';
+import type { Class } from '../../types/class';
+import type { LandingErrors } from '../../types/landing';
+import type { Trainer } from '../../types/trainer';
 
-const stast = [
-  { value: '500+', label: 'Miembros' },
-  { value: '10+', label: 'Entrenadores' },
-  { value: '24/7+', label: 'Acceso' },
-];
+interface HeroSectionProps {
+  classes: Class[];
+  trainers: Trainer[];
+  errors: LandingErrors;
+  isLoading: boolean;
+}
 
-const HeroSection = () => {
+const HeroSection = ({
+  classes,
+  trainers,
+  errors,
+  isLoading,
+}: HeroSectionProps) => {
+  const counts = heroCounts(classes, trainers, errors);
+
+  // While the data is still loading, classes/trainers are empty arrays and
+  // errors are all null, which heroCounts cannot tell apart from "the gym
+  // really has zero". Facts are omitted (not shown as zero) until loading
+  // finishes. A count is also omitted rather than shown as zero when its
+  // request failed, so an outage never advertises "0 disciplinas". See
+  // landing-highlights.ts.
+  const facts = [
+    !isLoading && counts.disciplines !== null
+      ? `${counts.disciplines} disciplinas`
+      : null,
+    !isLoading && counts.trainers !== null
+      ? `${counts.trainers} profesores`
+      : null,
+    'Lun a vie 06–23 hs',
+  ].filter((fact): fact is string => fact !== null);
+
+  // CSS media queries cannot stop autoPlay/loop, so the reduced-motion guard
+  // for the hero video needs a JS check. Recomputed on every render is fine:
+  // this is a cheap read and the component is not expected to react to the
+  // preference changing mid-session.
+  const prefersReducedMotion =
+    typeof window !== 'undefined' &&
+    window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
   return (
     <section
-      aria-labelledby="home-hero-heading"
-      className="relative overflow-hidden bg-bg-secondary py-16 lg:py-24"
+      id={LANDING_ANCHORS.hero}
+      aria-labelledby="hero-heading"
+      className="border-b border-border bg-background pt-14 pb-10 lg:pt-20"
     >
-      {/* Subtle Background Glow Accent */}
-      <div
-        aria-hidden="true"
-        className="pointer-events-none absolute -top-40 -left-40 h-96 w-96 rounded-full bg-primary/10 blur-3xl"
-      />
-      <div
-        aria-hidden="true"
-        className="pointer-events-none absolute -bottom-40 -right-40 h-96 w-96 rounded-full bg-primary/10 blur-3xl"
-      />
+      <Container>
+        <span className="inline-flex items-center gap-2 rounded-full border border-border bg-surface px-4 py-1.5 font-body text-xs text-text-muted">
+          <MapPin className="h-3.5 w-3.5 text-primary" aria-hidden="true" />
+          {GYM_LOCATION.street}, {GYM_LOCATION.city}
+        </span>
 
-      <Container className="relative z-10 grid grid-cols-1 items-center gap-12 lg:grid-cols-2 lg:gap-16">
-        <div className="flex flex-col items-start text-left">
-          <Badge variant="accent" icon={Trophy}>
-            1° Fitness App
-          </Badge>
+        <h1
+          id="hero-heading"
+          className="mt-6 max-w-4xl font-display text-5xl font-extrabold leading-[0.95] tracking-tight text-text sm:text-6xl lg:text-8xl"
+        >
+          TU MEJOR
+          <br />
+          <span className="text-primary">VERSIÓN</span> EMPIEZA ACÁ
+        </h1>
 
-          <h1
-            id="home-hero-heading"
-            className="mt-6 text-4xl font-extrabold tracking-tight sm:text-5xl lg:text-6xl text-text leading-[1.15]"
-          >
-            Transforma tu cuerpo,{' '}
-            <span className="text-primary">transforma tu vida</span>
-          </h1>
-
-          <p className="mt-6 text-lg sm:text-xl font-sans text-text-muted leading-relaxed max-w-xl">
-            Únete a cientos de personas que han alcanzado sus objetivos de
-            acondicionamiento físico gracias a nuestros entrenadores expertos y
-            equipos de última generación.
-          </p>
-
-          <div className="mt-8 flex flex-wrap gap-4 w-full sm:w-auto">
-            <Button href="/register" size="md" className="w-full sm:w-auto">
-              Empezar ahora
-            </Button>
-            <Button
-              href="/class"
-              variant="secondary"
-              size="md"
-              className="w-full sm:w-auto"
-            >
-              Visualizar clases
-            </Button>
-          </div>
-
-          <div className="mt-8 flex gap-12 text-center border-y border-border py-6 w-full max-w-lg">
-            {stast.map((stat) => (
-              <div key={stat.label}>
-                <p className="font-display text-2xl font-bold text-text sm:text-3xl">
-                  {stat.value}
-                </p>
-                <p className="text-text-muted mt-1">{stat.label}</p>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* video column */}
-        <div className="relative w-full max-w-lg mx-auto lg:max-w-none">
-          <div className="relative aspect-square w-full overflow-hidden rounded-3xl bg-surface border border-border shadow-2xl transition-transform duration-500 hover:scale-[1.01]">
+        <div className="mt-10 grid grid-cols-1 items-end gap-8 lg:grid-cols-[1.5fr_1fr]">
+          <div className="relative aspect-video w-full overflow-hidden rounded-2xl border border-border bg-surface">
             <video
               src="/videos/hero-video3.mp4"
               poster="/images/hero-imagen.avif"
-              autoPlay
+              autoPlay={!prefersReducedMotion}
               muted
-              loop
+              loop={!prefersReducedMotion}
               playsInline
+              preload="none"
+              aria-hidden="true"
+              tabIndex={-1}
               className="h-full w-full object-cover"
-            >
-              Tu navegador no soporta el elemento de video.
-            </video>
-            <div className="absolute inset-0 bg-linear-to-t from-black/60 via-transparent to-transparent pointer-events-none" />
+            />
+            <div
+              aria-hidden="true"
+              className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/60 to-transparent"
+            />
+          </div>
 
-            {/* Floating badge */}
-            <div className="absolute bottom-6 left-6 right-6 flex items-center gap-3 rounded-2xl border border-white/10 bg-surface/80 p-4 backdrop-blur-md shadow-xl">
-              <div className="bg-green-100 p-2 rounded-full">
-                <CheckCircle className="h-6 w-6 text-primary" />
-              </div>
-              <div>
-                <p className="text-sm font-semibold text-text">
-                  Resultados asegurados
-                </p>
-              </div>
+          <div>
+            <p className="font-body text-base leading-relaxed text-text-muted">
+              Equipamiento de primera línea, clases guiadas todos los días y
+              profesores que te acompañan desde el primer ejercicio.
+            </p>
+
+            <ul className="mt-5 flex flex-wrap gap-2">
+              {facts.map((fact) => (
+                <li
+                  key={fact}
+                  className="rounded-full border border-border bg-surface px-3 py-1 font-body text-xs text-text-muted"
+                >
+                  {fact}
+                </li>
+              ))}
+            </ul>
+
+            <div className="mt-6 flex flex-col gap-3 sm:flex-row lg:flex-col">
+              <a
+                href={`#${LANDING_ANCHORS.freePass}`}
+                className="inline-flex items-center justify-center rounded-full bg-primary px-6 py-3 font-body font-semibold text-background shadow-md transition-all duration-300 hover:-translate-y-0.5 hover:bg-primary-hover hover:shadow-xl"
+              >
+                Quiero mi pase gratis de 1 día
+              </a>
+              <Button href="/membership" variant="secondary">
+                Ver planes y precios
+              </Button>
             </div>
           </div>
         </div>

@@ -5,23 +5,16 @@ import {
   MessageCircle,
   ArrowUpRight,
 } from 'lucide-react';
+import {
+  buildWhatsAppHref,
+  formatWhatsAppPhone,
+  WHATSAPP_NUMBER,
+} from '../../lib/whatsapp';
 
-// The real number lives in .env, which is not versioned. The fallback is a
-// placeholder so the public repo does not expose a personal phone number.
-const WHATSAPP_NUMBER = import.meta.env.VITE_WHATSAPP_NUMBER || '5490000000000';
-
-// 5493410000000 -> +54 9 341 000-0000
-const formatPhone = (raw: string) => {
-  const parts = raw.match(/^(\d{2})(9)(\d{3})(\d{3})(\d{4})$/);
-  return parts
-    ? `+${parts[1]} ${parts[2]} ${parts[3]} ${parts[4]}-${parts[5]}`
-    : `+${raw}`;
-};
-
-const WHATSAPP_DISPLAY = formatPhone(WHATSAPP_NUMBER);
-const WHATSAPP_HREF = `https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(
+const WHATSAPP_DISPLAY = formatWhatsAppPhone(WHATSAPP_NUMBER);
+const WHATSAPP_HREF = buildWhatsAppHref(
   'Hola! Quisiera hacer una consulta sobre el gimnasio FLG',
-)}`;
+);
 
 const InstagramIcon = ({ className = 'w-6 h-6' }: { className?: string }) => (
   <svg
